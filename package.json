@@ -1,6 +1,6 @@
 {
   "name": "workerops",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generic guardian Worker that fronts a Cloudflare Worker to make self-updates safe and reversible (deploy / health-verify / auto-revert / recovery UI).",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.txt",
