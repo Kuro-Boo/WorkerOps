@@ -1,0 +1,39 @@
+name = "workerops"
+main = "src/index.ts"
+compatibility_date = "2026-05-13"
+workers_dev = false
+
+# ── State KV (WorkerOps' own state/lock — no app data). Create one, set its id. ──
+[[kv_namespaces]]
+binding = "WORKEROPS_STATE"
+id = "replace-with-kv-namespace-id"
+
+# ── Service binding to the app Worker this guardian fronts. ──
+[[services]]
+binding = "APP_SERVICE"
+service = "your-app-worker"
+
+# ── Watchdog: finish any update stuck in deployed_unverified (every 2 min). ──
+[triggers]
+crons = ["*/2 * * * *"]
+
+# ── Configuration. App-specific values live here, not in code. ──
+[vars]
+OPS_PATH = "/__workerops__"
+HEALTH_PATH = "/health"
+# MIGRATE_PATH = "/migrate"          # optional: app endpoint to run one-shot/migrations
+RELEASE_SOURCE = "owner/repo"        # GitHub repo holding the app's worker.js release
+RELEASE_ASSET = "worker.js"
+APP_WORKER_NAME = "your-app-worker"  # the app Worker script WorkerOps updates/reverts
+CF_ACCOUNT_ID = "replace-with-account-id"
+# Optional tunables: RETRY_MAX, RETRY_BASE_MS, REVERT_RETRY_MAX,
+# HEALTH_WINDOW_MS, HEALTH_INTERVAL_MS, UPDATE_LOCK_TTL_MS, BINDING_TYPES
+
+# Public route(s) — WorkerOps must own the public route to front the app:
+# [[routes]]
+# pattern = "example.com/*"
+# zone_name = "example.com"
+
+# Secrets (set with `wrangler secret put`):
+#   CF_API_TOKEN     - Cloudflare API token (Workers Scripts:Edit + KV:Edit)
+#   WORKER_OPS_TOKEN - guards the Ops operations / recovery page
