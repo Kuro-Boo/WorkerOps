@@ -3,10 +3,9 @@ node_modules/
 dist/
 .wrangler/
 
-# secrets / local env (keep the example only)
+# secrets / local env (keep the .example only)
 .dev.vars
 .env*
-!.env.bootstrap.example
 
 # AI / assistant files
 CLAUDE.md

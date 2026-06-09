@@ -1,0 +1,8 @@
+# Copy to `.dev.vars` for local `wrangler dev`. For production, set the same
+# values as Worker secrets via `wrangler secret put <NAME>`. Never commit `.dev.vars`.
+
+# Cloudflare API token used to update/revert the app Worker (Workers Scripts:Edit + KV:Edit)
+CF_API_TOKEN=
+
+# Token guarding the Ops operations (update/revert/reinstall) and the recovery console
+WORKER_OPS_TOKEN=
