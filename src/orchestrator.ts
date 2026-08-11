@@ -43,25 +43,33 @@ async function fetchReleaseWorker(
   if (!repo) throw new Error("RELEASE_SOURCE is not configured");
   const retry = { max: config.retryMax, baseMs: config.retryBaseMs };
 
-  // Release tag is informational (used for the strict version check / logging).
+  // Resolve the release tag WITHOUT the GitHub API.
+  //
+  // ⚠ Do not use api.github.com here. Unauthenticated it is capped at 60
+  //   requests/hour PER IP, and a Worker's egress IP is one of Cloudflare's
+  //   shared addresses — so the quota is routinely already exhausted by other
+  //   tenants and the call returns 403 regardless of our own usage (observed
+  //   2026-08 on a fresh account: KuroCMS self-update failed with
+  //   "API rate limit exceeded for <CF IP>"). We would also be spending a
+  //   shared resource that every other WorkerOps/KuroCMS install competes for.
+  //
+  // The HTML endpoint /releases/latest 302-redirects to /releases/tag/vX.Y.Z
+  // and is NOT rate-limited, with the same semantics as the API's
+  // /releases/latest (newest non-prerelease, non-draft release).
   let tag = "latest";
   try {
     const r = await fetchRetry(
-      `https://api.github.com/repos/${repo}/releases/latest`,
-      {
-        headers: {
-          "User-Agent": "WorkerOps/1.0",
-          Accept: "application/vnd.github+json",
-        },
-      },
+      `https://github.com/${repo}/releases/latest`,
+      { redirect: "manual", headers: { "User-Agent": "WorkerOps/1.0" } },
       retry,
     );
-    if (r.ok) {
-      const d = (await r.json().catch(() => null)) as { tag_name?: string } | null;
-      if (d?.tag_name) tag = d.tag_name;
-    }
+    const located = (r.headers.get("location") || "").split(
+      "/releases/tag/",
+    )[1];
+    const candidate = (located || "").split(/[?#]/)[0].trim();
+    if (/^v\d+\.\d+\.\d+$/.test(candidate)) tag = candidate;
   } catch {
-    /* tag is best-effort */
+    /* tag is best-effort — falls back to /releases/latest/download below */
   }
 
   // Download the asset from the resolved tag's URL (deterministic) rather than
