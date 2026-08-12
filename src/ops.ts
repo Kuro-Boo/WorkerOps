@@ -86,6 +86,18 @@ export async function handleOps(
       return status();
     }
 
+    // Token check — requires WORKER_OPS_TOKEN but changes NOTHING.
+    //
+    // ⚠ Exists so nobody probes "is my token valid?" by firing an operation.
+    //   A caller once used POST /api/v1/revert as an auth probe: it authenticated,
+    //   so it RAN — the rollback was a no-op only because no last-good version had
+    //   been recorded yet, and it still left the guardian in `manual_required`.
+    //   Any credential check must have a read-only endpoint to aim at.
+    if (request.method === "GET" && sub === "/api/v1/auth-check") {
+      requireToken(request, config);
+      return jsonResponse({ ok: true, authorized: true, service: "workerops" });
+    }
+
     // Operations — require WORKER_OPS_TOKEN. Both the page paths and /api/v1.
     if (request.method === "POST" && (sub === "/update" || sub === "/api/v1/update")) {
       requireToken(request, config);
