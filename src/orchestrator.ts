@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import type { Config } from "./config";
+import { filterBindings } from "./bindings";
 import { CfClient } from "./cf";
 import {
   getState,
@@ -27,13 +28,6 @@ function cf(config: Config, retryMax?: number): CfClient {
   });
 }
 
-/** Keep only binding types that can be re-submitted; secrets persist on their own. */
-function filterBindings(bindings: unknown[], allow: Set<string>): unknown[] {
-  return (bindings ?? []).filter((b) => {
-    const t = (b as { type?: string })?.type;
-    return typeof t === "string" && allow.has(t);
-  });
-}
 
 async function fetchReleaseWorker(
   env: Env,
