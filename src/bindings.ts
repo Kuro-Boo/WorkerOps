@@ -2,7 +2,13 @@
 // worker 依存を持たせない）。
 
 /**
- * 再送信できる binding だけ残し、secret は `inherit` で引き継ぐ。
+ * app へ再送信する binding を組み立てる。secret は `inherit` で引き継ぐ。
+ *
+ * ⚠ 既定では【型で絞らない】。かつては許可リスト
+ *   (d1,kv_namespace,r2_bucket,plain_text,service) 方式で、そこに無い型が
+ *   黙って消えていた。2026-08-13 に kuro.boo の app から `images` binding が
+ *   実際に消えた。CF は binding 型を増やし続けるので、知らない型を落とす設計は
+ *   必ず破綻する。BINDING_TYPES を明示した場合だけ従来どおり許可リストとして扱う。
  *
  * ⚠ かつてここは「secret は勝手に残る」として secret_text を単に捨てていたが、
  *   それが成り立つのは【script の PUT】であって、WorkerOps が使う
@@ -14,7 +20,7 @@
  */
 export function filterBindings(
   bindings: unknown[],
-  allow: Set<string>,
+  allow: Set<string> | null,
 ): unknown[] {
   const out: unknown[] = [];
   for (const b of bindings ?? []) {
@@ -25,7 +31,8 @@ export function filterBindings(
       if (typeof name === "string" && name) out.push({ type: "inherit", name });
       continue;
     }
-    if (allow.has(t)) out.push(b);
+    // allow が null（BINDING_TYPES 未設定＝既定）なら型を問わず残す。
+    if (allow === null || allow.has(t)) out.push(b);
   }
   return out;
 }

@@ -47,7 +47,31 @@ eq(
     { type: "service", name: "APP_SERVICE", service: "app" },
   ],
 );
-eq("未許可の型は捨てる", f([{ type: "mystery", name: "M" }]), []);
+eq(
+  "許可リストを明示したときだけ未知の型を捨てる",
+  f([{ type: "mystery", name: "M" }]),
+  [],
+);
+
+// ⚠ 既定（BINDING_TYPES 未設定＝null）は型で絞らない。CF は binding 型を増やし
+//    続けるので、知らない型を落とす設計は必ず破綻する（images が実際に消えた）。
+const keepAll = (b: unknown[]) => filterBindings(b, null);
+eq(
+  "既定: 知らない型も残す",
+  keepAll([
+    { type: "images", name: "IMAGES" },
+    { type: "future_thing", name: "F" },
+  ]),
+  [
+    { type: "images", name: "IMAGES" },
+    { type: "future_thing", name: "F" },
+  ],
+);
+eq(
+  "既定でも secret は inherit に変換",
+  keepAll([{ type: "secret_text", name: "S" }]),
+  [{ type: "inherit", name: "S" }],
+);
 eq("type が無い要素は捨てる", f([{ name: "X" }]), []);
 eq("空配列", f([]), []);
 

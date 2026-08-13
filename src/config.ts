@@ -16,7 +16,7 @@ export interface Config {
   healthWindowMs: number;
   healthIntervalMs: number;
   lockTtlMs: number;
-  bindingTypes: Set<string>;
+  bindingTypes: Set<string> | null;
 }
 
 function int(value: string | undefined, fallback: number): number {
@@ -50,11 +50,15 @@ export function loadConfig(env: Env): Config {
     healthWindowMs: int(env.HEALTH_WINDOW_MS, 45000),
     healthIntervalMs: int(env.HEALTH_INTERVAL_MS, 2000),
     lockTtlMs: int(env.UPDATE_LOCK_TTL_MS, 120000),
-    bindingTypes: new Set(
-      (env.BINDING_TYPES ?? "d1,kv_namespace,r2_bucket,plain_text,service")
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    ),
+    // ⚠ 未設定なら null＝【型で絞らない】。既定を許可リストにしていたため、
+    //   そこに無い型 (images など) が更新のたびに消えていた。明示された場合だけ
+    //   従来どおり許可リストとして働く。
+    bindingTypes: env.BINDING_TYPES
+      ? new Set(
+          env.BINDING_TYPES.split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+        )
+      : null,
   };
 }
