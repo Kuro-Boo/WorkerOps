@@ -37,6 +37,20 @@ async function fetchReleaseWorker(
   if (!repo) throw new Error("RELEASE_SOURCE is not configured");
   const retry = { max: config.retryMax, baseMs: config.retryBaseMs };
 
+  // Private repositories cannot use the unauthenticated path below: both the
+  // /releases/latest redirect and /releases/download/... return 404 without
+  // credentials. When GITHUB_TOKEN is set we therefore go through the API.
+  //
+  // This does NOT reintroduce the rate-limit problem the comment below
+  // describes. That problem is specific to UNAUTHENTICATED API calls, which
+  // are capped per shared Cloudflare egress IP. An authenticated call is
+  // capped at 5,000/hour PER TOKEN, so it neither competes with other tenants
+  // nor with other installs. Public installs (no token) keep the existing
+  // path unchanged.
+  if (config.githubToken) {
+    return fetchReleaseWorkerViaApi(repo, config, retry);
+  }
+
   // Resolve the release tag WITHOUT the GitHub API.
   //
   // ⚠ Do not use api.github.com here. Unauthenticated it is capped at 60
@@ -76,6 +90,55 @@ async function fetchReleaseWorker(
   const res = await fetchRetry(
     url,
     { redirect: "follow", headers: { "User-Agent": "WorkerOps/1.0" } },
+    { ...retry, timeoutMs: 30_000 },
+  );
+  if (!res.ok) throw new Error(`release asset HTTP ${res.status}`);
+  const script = await res.text();
+  if (!script || script.length < 10) throw new Error("release asset empty");
+  return { tag, script };
+}
+
+/**
+ * Private-repo release fetch (GitHub API).
+ *
+ * Two calls: resolve the tag, then download the asset by id. The asset must be
+ * pulled from /releases/assets/{id} with Accept: application/octet-stream —
+ * browser_download_url is not usable with a token on private repos.
+ */
+async function fetchReleaseWorkerViaApi(
+  repo: string,
+  config: Config,
+  retry: { max: number; baseMs: number },
+): Promise<{ tag: string; script: string }> {
+  const headers = {
+    Authorization: `Bearer ${config.githubToken}`,
+    "User-Agent": "WorkerOps/1.0",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+
+  const relRes = await fetchRetry(
+    `https://api.github.com/repos/${repo}/releases/latest`,
+    { headers: { ...headers, Accept: "application/vnd.github+json" } },
+    retry,
+  );
+  if (!relRes.ok) throw new Error(`release lookup HTTP ${relRes.status}`);
+  const rel = (await relRes.json()) as {
+    tag_name?: string;
+    assets?: { id: number; name: string }[];
+  };
+  const tag = /^v\d+\.\d+\.\d+$/.test(rel.tag_name || "")
+    ? (rel.tag_name as string)
+    : "latest";
+
+  const asset = (rel.assets || []).find((a) => a.name === config.releaseAsset);
+  if (!asset) throw new Error(`release asset ${config.releaseAsset} not found`);
+
+  const res = await fetchRetry(
+    `https://api.github.com/repos/${repo}/releases/assets/${asset.id}`,
+    {
+      redirect: "follow",
+      headers: { ...headers, Accept: "application/octet-stream" },
+    },
     { ...retry, timeoutMs: 30_000 },
   );
   if (!res.ok) throw new Error(`release asset HTTP ${res.status}`);

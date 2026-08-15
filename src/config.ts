@@ -6,6 +6,8 @@ export interface Config {
   migratePath: string | null;
   releaseSource: string;
   releaseAsset: string;
+  /** private リポジトリを読むときだけ使う。空なら未認証経路(既定)。 */
+  githubToken: string;
   token: string;
   accountId: string;
   appWorkerName: string;
@@ -40,6 +42,7 @@ export function loadConfig(env: Env): Config {
     migratePath: env.MIGRATE_PATH ? absPath(env.MIGRATE_PATH, "/migrate") : null,
     releaseSource: (env.RELEASE_SOURCE ?? "").trim(),
     releaseAsset: (env.RELEASE_ASSET ?? "worker.js").trim() || "worker.js",
+    githubToken: (env.GITHUB_TOKEN ?? "").trim(),
     token: env.CF_API_TOKEN ?? "",
     accountId: env.CF_ACCOUNT_ID ?? "",
     appWorkerName: env.APP_WORKER_NAME ?? "",

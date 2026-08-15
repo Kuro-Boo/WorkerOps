@@ -20,6 +20,8 @@ export interface Env {
   APP_WORKER_NAME: string;
   /** Release source for the app worker.js, e.g. GitHub "owner/repo". */
   RELEASE_SOURCE: string;
+  /** private リリースを読むための token。未設定なら未認証経路(public 用・既定)。 */
+  GITHUB_TOKEN?: string;
   /** Release asset filename (default "worker.js"). */
   RELEASE_ASSET?: string;
   /** Path prefix WorkerOps reserves for itself (default "/__workerops__"). */
