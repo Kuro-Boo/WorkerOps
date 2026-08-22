@@ -175,3 +175,104 @@ export async function clearStaleLock(
     await env.WORKEROPS_STATE.delete(LOCK_KEY);
   }
 }
+
+// ── Self-update state (the guardian replacing ITSELF) ──────────────────────
+// Kept in its own KV key, deliberately: entangling it with the app's update
+// state would let one lifecycle's writes clobber the other's, and the self
+// journal must survive an app update (and vice versa).
+
+export type SelfChannel = "stable" | "develop";
+
+export type SelfStatus =
+  | "idle"
+  | "updating"
+  | "updated"
+  | "rolled_back"
+  | "failed";
+
+export interface SelfState {
+  /**
+   * Which releases this guardian accepts. "stable" — the only value a normal
+   * install should ever have — takes GitHub's /releases/latest, which excludes
+   * prereleases. "develop" takes the newest release including prereleases and
+   * is for the developer's own instances.
+   */
+  channel: SelfChannel;
+  status: SelfStatus;
+  /** Version id to fall back to if a self-update turns out to be broken. */
+  lastGoodVersionId: string | null;
+  fromVersionId: string | null;
+  toVersionId: string | null;
+  /** Release tag the last self-update aimed at. */
+  targetTag: string | null;
+  /** Epoch ms of the last release check (throttle anchor). */
+  lastCheckAt: number;
+  lastUpdateAt: string | null;
+  /** Successful self-updates, and self-updates rolled back after verification. */
+  updateCount: number;
+  rollbackCount: number;
+  error: string | null;
+  events: OpEvent[];
+  updatedAt: string;
+}
+
+const SELF_KEY = "workerops:self";
+
+const DEFAULT_SELF: SelfState = {
+  channel: "stable",
+  status: "idle",
+  lastGoodVersionId: null,
+  fromVersionId: null,
+  toVersionId: null,
+  targetTag: null,
+  lastCheckAt: 0,
+  lastUpdateAt: null,
+  updateCount: 0,
+  rollbackCount: 0,
+  error: null,
+  events: [],
+  updatedAt: "",
+};
+
+export async function getSelfState(env: Env): Promise<SelfState> {
+  const raw = await env.WORKEROPS_STATE.get(SELF_KEY);
+  if (!raw) return { ...DEFAULT_SELF };
+  try {
+    const parsed = JSON.parse(raw) as Partial<SelfState>;
+    const merged = { ...DEFAULT_SELF, ...parsed };
+    // Anything but the two known channels means a corrupt/older value; fall
+    // back to stable rather than silently accepting prereleases.
+    if (merged.channel !== "develop") merged.channel = "stable";
+    return merged;
+  } catch {
+    return { ...DEFAULT_SELF };
+  }
+}
+
+export async function setSelfState(
+  env: Env,
+  patch: Partial<SelfState>,
+): Promise<SelfState> {
+  const next: SelfState = {
+    ...(await getSelfState(env)),
+    ...patch,
+    updatedAt: nowIso(),
+  };
+  await env.WORKEROPS_STATE.put(SELF_KEY, JSON.stringify(next));
+  return next;
+}
+
+/** Append one step to the self-update journal. */
+export async function appendSelfEvent(
+  env: Env,
+  step: string,
+  state: OpEvent["state"],
+  detail?: string,
+): Promise<void> {
+  const current = await getSelfState(env);
+  const event: OpEvent = { at: nowIso(), step, state };
+  if (detail) event.detail = detail.slice(0, 300);
+  await setSelfState(env, {
+    events: [...current.events, event].slice(-EVENT_CAP),
+  });
+}

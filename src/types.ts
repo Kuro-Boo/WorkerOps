@@ -31,6 +31,21 @@ export interface Env {
   /** Optional app endpoint to run one-shot/migrations during an update. */
   MIGRATE_PATH?: string;
 
+  // ── Self-update (the guardian updating ITSELF) ─────────────────────────
+  /**
+   * Name of THIS guardian's own Worker script. Self-update is DISABLED unless
+   * it is set — a guardian that cannot name itself must never try to replace
+   * itself, and "off" is the only safe default for a component whose failure
+   * has no in-band recovery.
+   */
+  OPS_WORKER_NAME?: string;
+  /** Repo holding WorkerOps' own releases (default "Kuro-Boo/WorkerOps"). */
+  SELF_RELEASE_SOURCE?: string;
+  /** How often to look for a new WorkerOps release (default 6h). */
+  SELF_UPDATE_INTERVAL_MS?: string;
+  /** Set to "0"/"false" to switch self-update off even when named. */
+  SELF_UPDATE?: string;
+
   // ── Tunables (optional, string env) ────────────────────────────────────
   RETRY_MAX?: string;
   RETRY_BASE_MS?: string;

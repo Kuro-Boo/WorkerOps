@@ -19,6 +19,11 @@ export interface Config {
   healthIntervalMs: number;
   lockTtlMs: number;
   bindingTypes: Set<string> | null;
+  /** Own script name; empty disables self-update. */
+  opsWorkerName: string;
+  selfReleaseSource: string;
+  selfUpdateIntervalMs: number;
+  selfUpdateEnabled: boolean;
 }
 
 function int(value: string | undefined, fallback: number): number {
@@ -53,6 +58,17 @@ export function loadConfig(env: Env): Config {
     healthWindowMs: int(env.HEALTH_WINDOW_MS, 45000),
     healthIntervalMs: int(env.HEALTH_INTERVAL_MS, 2000),
     lockTtlMs: int(env.UPDATE_LOCK_TTL_MS, 120000),
+    opsWorkerName: (env.OPS_WORKER_NAME ?? "").trim(),
+    selfReleaseSource:
+      (env.SELF_RELEASE_SOURCE ?? "").trim() || "Kuro-Boo/WorkerOps",
+    selfUpdateIntervalMs: int(env.SELF_UPDATE_INTERVAL_MS, 6 * 60 * 60 * 1000),
+    // Named AND not explicitly switched off. Both conditions, because the
+    // failure mode of a bad self-update is "no way back from inside".
+    selfUpdateEnabled:
+      !!(env.OPS_WORKER_NAME ?? "").trim() &&
+      !["0", "false", "off", "no"].includes(
+        (env.SELF_UPDATE ?? "").trim().toLowerCase(),
+      ),
     // ⚠ 未設定なら null＝【型で絞らない】。既定を許可リストにしていたため、
     //   そこに無い型 (images など) が更新のたびに消えていた。明示された場合だけ
     //   従来どおり許可リストとして働く。
