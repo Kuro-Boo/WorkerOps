@@ -188,7 +188,13 @@ export async function selfUpdateTick(
   nextLocalCheckAt = Date.now() + Math.min(config.selfUpdateIntervalMs, 900_000);
 
   const state = await getSelfState(env);
-  if (Date.now() - state.lastCheckAt < config.selfUpdateIntervalMs) return;
+  // ±10% jitter on the window. Each install's window is anchored to its own
+  // last check so they drift apart on their own, but a batch of guardians
+  // created together (an installer rollout) would start out synchronized and
+  // keep hitting github.com in lockstep. Cheap insurance against that.
+  const window =
+    config.selfUpdateIntervalMs * (0.9 + Math.random() * 0.2);
+  if (Date.now() - state.lastCheckAt < window) return;
 
   // Never race an app update: both lifecycles redeploy Workers through the same
   // account, and a self-update mid-app-update would swap out the very code that
