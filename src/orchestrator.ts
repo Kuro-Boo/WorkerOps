@@ -8,6 +8,8 @@ import {
   acquireLock,
   releaseLock,
   clearStaleLock,
+  startJournal,
+  appendEvent,
 } from "./state";
 import { probeHealth, runMigrate } from "./health";
 import { fetchRetry } from "./retry";
@@ -172,6 +174,7 @@ export async function deployLatest(
   let lockHeld = true;
 
   const fail = async (error: string): Promise<DeployResult> => {
+    await appendEvent(env, "aborted", "fail", error);
     await setState(env, {
       status: "failed_predeploy",
       error,
@@ -183,9 +186,15 @@ export async function deployLatest(
   };
 
   try {
+    await startJournal(env, reason);
+    await appendEvent(env, "start", "ok", `operation: ${reason}`);
+    await appendEvent(env, "read_active", "run");
     const fromVersion = await client.getActiveVersionId();
+    await appendEvent(env, "read_active", "ok", fromVersion ?? "unknown");
     // Anchor for propagation-aware verification: the version the app reports now.
+    await appendEvent(env, "probe_before", "run");
     const prevAppVersion = (await probeHealth(env, config)).version ?? null;
+    await appendEvent(env, "probe_before", "ok", prevAppVersion ?? "unknown");
     await setState(env, {
       status: "pending",
       fromVersionId: fromVersion,
@@ -202,21 +211,36 @@ export async function deployLatest(
     });
 
     let rel: { tag: string; script: string };
+    await appendEvent(env, "fetch_release", "run", config.releaseSource);
     try {
       rel = await fetchReleaseWorker(env, config);
+      await appendEvent(
+        env,
+        "fetch_release",
+        "ok",
+        `${rel.tag} (${rel.script.length} bytes)`,
+      );
     } catch (e) {
       return await fail(`release fetch failed: ${errMsg(e)}`);
     }
 
     let settings;
+    await appendEvent(env, "read_settings", "run");
     try {
       settings = await client.getSettings();
     } catch (e) {
       return await fail(`get settings failed: ${errMsg(e)}`);
     }
     const bindings = filterBindings(settings.bindings, config.bindingTypes);
+    await appendEvent(
+      env,
+      "read_settings",
+      "ok",
+      `${bindings.length} bindings carried over`,
+    );
 
     let versionId: string;
+    await appendEvent(env, "upload_version", "run");
     try {
       versionId = await client.uploadVersion(
         rel.script,
@@ -227,15 +251,24 @@ export async function deployLatest(
     } catch (e) {
       return await fail(`upload version failed: ${errMsg(e)}`);
     }
+    await appendEvent(env, "upload_version", "ok", versionId);
     await setState(env, { toVersionId: versionId, intendedRelease: rel.tag });
 
+    await appendEvent(env, "deploy_version", "run", versionId);
     try {
       await client.deployVersion(versionId, `WorkerOps ${reason} ${rel.tag}`);
     } catch (e) {
       // App is still on the previous version — nothing to revert.
       return await fail(`deploy failed (app unchanged): ${errMsg(e)}`);
     }
+    await appendEvent(env, "deploy_version", "ok", rel.tag);
     await setState(env, { status: "deployed_unverified", deployedAt: nowIso() });
+    await appendEvent(
+      env,
+      "verify",
+      "run",
+      `health window ${config.healthWindowMs}ms`,
+    );
 
     // Verification continues in the background and releases the lock when done.
     lockHeld = false;
@@ -282,11 +315,14 @@ async function verifyAndFinalize(
   //  propagation lag and miss a broken migration, same as the health check.)
   const finalize = async (): Promise<void> => {
     if (config.migratePath) {
+      await appendEvent(env, "migrate", "run", config.migratePath);
       const migrated = await runMigrate(env, config);
       if (!migrated) {
-        await revertTo(env, config, "migrate failed");
+        await appendEvent(env, "migrate", "fail");
+        await revertTo(env, config, "migrate failed", true);
         return;
       }
+      await appendEvent(env, "migrate", "ok");
     }
     await confirm(env, opts.toVersionId);
   };
@@ -303,9 +339,16 @@ async function verifyAndFinalize(
       if (newVersionLive) {
         // The new deployment is the one actually responding — decide now.
         if (h.ok) {
+          await appendEvent(env, "verify", "ok", `app reports ${h.version}`);
           await finalize();
         } else {
-          await revertTo(env, config, "health check failed");
+          await appendEvent(
+            env,
+            "verify",
+            "fail",
+            `app reports ${h.version} but health is not ok (HTTP ${h.status})`,
+          );
+          await revertTo(env, config, "health check failed", true);
         }
         return;
       }
@@ -317,9 +360,21 @@ async function verifyAndFinalize(
     // unknown-version app, or propagation never surfaced it). Proceed only if it
     // stayed healthy; otherwise revert.
     if (opts.prevAppVersion === null || sawOk) {
+      await appendEvent(
+        env,
+        "verify",
+        "ok",
+        "window elapsed while healthy (new version never distinguished)",
+      );
       await finalize();
     } else {
-      await revertTo(env, config, "health check failed (new version not observed)");
+      await appendEvent(env, "verify", "fail", "never became healthy in window");
+      await revertTo(
+        env,
+        config,
+        "health check failed (new version not observed)",
+        true,
+      );
     }
   } finally {
     await releaseLock(env);
@@ -327,6 +382,7 @@ async function verifyAndFinalize(
 }
 
 async function confirm(env: Env, toVersionId: string): Promise<void> {
+  await appendEvent(env, "confirm", "ok", toVersionId);
   await setState(env, {
     status: "confirmed",
     confirmedAt: nowIso(),
@@ -336,18 +392,47 @@ async function confirm(env: Env, toVersionId: string): Promise<void> {
   });
 }
 
-/** Roll back to the last-good version via the CF Versions/Deployments API. */
+/**
+ * Roll back to the last-good version via the CF Versions/Deployments API.
+ *
+ * `auto` marks a rollback WorkerOps decided on by itself (verification failed,
+ * or the watchdog found a deploy still unverified). Those are counted and shown
+ * in the console: a human needs to know the guardian has been stepping in, and
+ * how often, because nothing else makes it visible.
+ */
 async function revertTo(
   env: Env,
   config: Config,
   reason: string,
+  auto = false,
 ): Promise<void> {
-  const target = (await getState(env)).lastGoodVersionId;
+  const before = await getState(env);
+  const target = before.lastGoodVersionId;
+  const counters = auto
+    ? {
+        autoRevertCount: before.autoRevertCount + 1,
+        lastAutoRevertAt: nowIso(),
+        lastAutoRevertReason: reason,
+      }
+    : {};
+  await appendEvent(
+    env,
+    auto ? "auto_revert" : "revert",
+    "run",
+    `${reason}${target ? ` → ${target}` : ""}`,
+  );
   if (!target) {
+    await appendEvent(
+      env,
+      auto ? "auto_revert" : "revert",
+      "fail",
+      "no last-good version recorded",
+    );
     await setState(env, {
       status: "manual_required",
       error: `${reason}; no last-good version to revert to`,
       finishedAt: nowIso(),
+      ...counters,
     });
     return;
   }
@@ -356,16 +441,25 @@ async function revertTo(
       target,
       `WorkerOps revert (${reason})`,
     );
+    await appendEvent(env, auto ? "auto_revert" : "revert", "ok", target);
     await setState(env, {
       status: "reverted",
       finishedAt: nowIso(),
       error: reason,
+      ...counters,
     });
   } catch (e) {
+    await appendEvent(
+      env,
+      auto ? "auto_revert" : "revert",
+      "fail",
+      errMsg(e),
+    );
     await setState(env, {
       status: "manual_required",
       error: `${reason}; revert failed: ${errMsg(e)}`,
       finishedAt: nowIso(),
+      ...counters,
     });
   }
 }
@@ -376,6 +470,7 @@ export async function runRevert(env: Env, config: Config): Promise<DeployResult>
     throw new OpsError(409, "update_in_progress", "An operation is already in progress.");
   }
   try {
+    await startJournal(env, "revert");
     await revertTo(env, config, "manual");
     const st = await getState(env);
     return {
@@ -400,6 +495,12 @@ export async function watchdogTick(env: Env, config: Config): Promise<void> {
 
   const h = await probeHealth(env, config);
   if (h.ok) {
+    await appendEvent(
+      env,
+      "watchdog",
+      "ok",
+      "unverified deploy found healthy after the window",
+    );
     await setState(env, {
       status: "confirmed",
       confirmedAt: nowIso(),
@@ -408,6 +509,12 @@ export async function watchdogTick(env: Env, config: Config): Promise<void> {
       error: null,
     });
   } else {
-    await revertTo(env, config, "watchdog: unverified after window");
+    await appendEvent(
+      env,
+      "watchdog",
+      "fail",
+      `still unhealthy after the window (HTTP ${h.status})`,
+    );
+    await revertTo(env, config, "watchdog: unverified after window", true);
   }
 }

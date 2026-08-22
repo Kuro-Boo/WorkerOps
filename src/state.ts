@@ -10,6 +10,24 @@ export type UpdateStatus =
   | "failed_predeploy"
   | "manual_required";
 
+/**
+ * One step of an operation, as it happened. Recorded by the orchestrator so the
+ * recovery console can report the actual course of a revert/update instead of
+ * just its final status — an operation runs for up to a minute across a
+ * background waitUntil, and until now the only visible outcome was a status
+ * word that appeared after the fact.
+ */
+export interface OpEvent {
+  at: string;
+  /** Machine-readable step key; the console localizes it. */
+  step: string;
+  state: "run" | "ok" | "fail";
+  detail?: string;
+}
+
+/** Kept small on purpose: this lives in one KV value alongside the state. */
+export const EVENT_CAP = 40;
+
 export interface UpdateState {
   status: UpdateStatus;
   /** CF version id known to be healthy — the revert target. */
@@ -25,6 +43,19 @@ export interface UpdateState {
   finishedAt: string | null;
   error: string | null;
   updatedAt: string;
+  /** Step-by-step journal of the most recent operation (oldest first). */
+  events: OpEvent[];
+  /** Which operation the journal belongs to ("update" / "reinstall" / "revert"). */
+  operation: string | null;
+  /**
+   * How many times WorkerOps rolled the app back BY ITSELF (verification failed
+   * or the watchdog found an unverified deploy) — never counts a human pressing
+   * Revert. This is the only automatic recovery WorkerOps performs; it does not
+   * restart a Worker that fails during normal operation.
+   */
+  autoRevertCount: number;
+  lastAutoRevertAt: string | null;
+  lastAutoRevertReason: string | null;
 }
 
 const STATE_KEY = "workerops:state";
@@ -43,6 +74,11 @@ const DEFAULT_STATE: UpdateState = {
   finishedAt: null,
   error: null,
   updatedAt: "",
+  events: [],
+  operation: null,
+  autoRevertCount: 0,
+  lastAutoRevertAt: null,
+  lastAutoRevertReason: null,
 };
 
 export async function getState(env: Env): Promise<UpdateState> {
@@ -66,6 +102,32 @@ export async function setState(
   };
   await env.WORKEROPS_STATE.put(STATE_KEY, JSON.stringify(next));
   return next;
+}
+
+/** Begin a fresh journal for `operation`, discarding the previous run's steps. */
+export async function startJournal(
+  env: Env,
+  operation: string,
+): Promise<void> {
+  await setState(env, { operation, events: [] });
+}
+
+/**
+ * Append one step to the journal. Read-modify-write, which is safe here because
+ * every operation holds the single-flight lock while it runs.
+ */
+export async function appendEvent(
+  env: Env,
+  step: string,
+  state: OpEvent["state"],
+  detail?: string,
+): Promise<void> {
+  const current = await getState(env);
+  const event: OpEvent = { at: nowIso(), step, state };
+  if (detail) event.detail = detail.slice(0, 300);
+  await setState(env, {
+    events: [...current.events, event].slice(-EVENT_CAP),
+  });
 }
 
 interface Lock {
