@@ -11,6 +11,7 @@ import {
   releaseLock,
 } from "./state";
 import { fetchRetry } from "./retry";
+import { isNewer, parseAtomTag, stripV } from "./release-tag";
 import { WORKEROPS_VERSION } from "./version";
 import { errMsg, nowIso, sleep } from "./util";
 
@@ -36,21 +37,6 @@ import { errMsg, nowIso, sleep } from "./util";
 /** How long to wait for the freshly deployed version to answer for itself. */
 const VERIFY_WINDOW_MS = 24_000;
 const VERIFY_INTERVAL_MS = 3_000;
-
-const stripV = (s: string): string => s.replace(/^v/, "").trim();
-
-/** true when `a` is a strictly higher semver than `b`. */
-function isNewer(a: string, b: string): boolean {
-  const pa = stripV(a).split(".").map(Number);
-  const pb = stripV(b).split(".").map(Number);
-  if (pa.some(Number.isNaN) || pb.some(Number.isNaN)) return false;
-  for (let i = 0; i < 3; i++) {
-    const x = pa[i] ?? 0;
-    const y = pb[i] ?? 0;
-    if (x !== y) return x > y;
-  }
-  return false;
-}
 
 /**
  * Newest release tag for the channel.
@@ -78,13 +64,7 @@ async function resolveTag(
       retry,
     );
     if (!res.ok) return null;
-    const xml = await res.text();
-    // <id>tag:github.com,2008:Repository/{repoId}/{tag}</id>, newest first.
-    const m = xml.match(
-      new RegExp("<id>tag:github\\.com,2008:Repository/\\d+/([^<]+)</id>"),
-    );
-    const tag = (m?.[1] || "").trim();
-    return /^v\d+\.\d+\.\d+/.test(tag) ? tag : null;
+    return parseAtomTag(await res.text());
   }
 
   const res = await fetchRetry(

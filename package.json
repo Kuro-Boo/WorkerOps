@@ -1,6 +1,6 @@
 {
   "name": "workerops",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Generic guardian Worker that fronts a Cloudflare Worker to make self-updates safe and reversible (deploy / health-verify / auto-revert / recovery UI).",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.txt",
@@ -27,7 +27,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
-    "test:bindings": "node src/bindings.test.ts"
+    "test:bindings": "node src/bindings.test.ts",
+    "test:selfupdate": "node src/self-update.test.ts",
+    "test": "npm run test:bindings && npm run test:selfupdate"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260510.0",

@@ -26,6 +26,15 @@ RELEASE_SOURCE = "owner/repo"        # GitHub repo holding the app's worker.js r
 RELEASE_ASSET = "worker.js"
 APP_WORKER_NAME = "your-app-worker"  # the app Worker script WorkerOps updates/reverts
 CF_ACCOUNT_ID = "replace-with-account-id"
+# ── 自己更新（guardian が自分自身を新しい WorkerOps に入れ替える）──────
+# OPS_WORKER_NAME = "your-guardian-worker"  # ★ この guardian 自身の Worker 名。
+#   未設定なら自己更新は無効。自分の名前を知らない guardian に自分を書き換え
+#   させないための、意図的に安全側の既定（壊れた版に入れ替わると復旧コンソール
+#   ごと失われ、内側から戻す手段が無くなる）。
+# SELF_RELEASE_SOURCE = "Kuro-Boo/WorkerOps"   # 既定
+# SELF_UPDATE_INTERVAL_MS = "21600000"          # 既定 6h（±10% のジッター付き）
+# SELF_UPDATE = "0"                             # 明示的に自己更新を止める
+
 # Optional tunables: RETRY_MAX, RETRY_BASE_MS, REVERT_RETRY_MAX,
 # HEALTH_WINDOW_MS, HEALTH_INTERVAL_MS, UPDATE_LOCK_TTL_MS, BINDING_TYPES
 

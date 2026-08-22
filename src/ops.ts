@@ -1,9 +1,10 @@
 import type { Env } from "./types";
 import type { Config } from "./config";
-import { getState } from "./state";
+import { getState, getSelfState, setSelfState } from "./state";
 import { deployLatest, runRevert, watchdogTick } from "./orchestrator";
 import { probeHealth } from "./health";
 import { fetchAppIncidents } from "./incidents";
+import { WORKEROPS_VERSION } from "./version";
 import { CfClient } from "./cf";
 import { jsonResponse, constantTimeEqual, OpsError } from "./util";
 
@@ -37,8 +38,9 @@ export async function handleOps(
     // Status payload (public). Shared by the recovery page and the REST API.
     const status = async (): Promise<Response> => {
       ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
-      const [state, activeVersionId, health, incidents] = await Promise.all([
+      const [state, self, activeVersionId, health, incidents] = await Promise.all([
         getState(env),
+        getSelfState(env),
         new CfClient(config.token, config.accountId, config.appWorkerName, {
           max: 1,
           baseMs: config.retryBaseMs,
@@ -66,6 +68,14 @@ export async function handleOps(
           lockTtlMs: config.lockTtlMs,
         },
         state,
+        self: {
+          ...self,
+          version: WORKEROPS_VERSION,
+          releaseSource: config.selfReleaseSource,
+          enabled: config.selfUpdateEnabled,
+          intervalMs: config.selfUpdateIntervalMs,
+          workerName: config.opsWorkerName,
+        },
         cf: { activeVersionId },
         health,
         incidents,
@@ -80,8 +90,15 @@ export async function handleOps(
     }
 
     // REST API liveness (for AI/external callers).
+    // ⚠ `version` is what a self-update checks to decide whether the new build
+    //   actually took. Do not remove it, and do not make this handler depend on
+    //   anything that can fail — it is also the app-independent liveness probe.
     if (request.method === "GET" && sub === "/api/v1/health") {
-      return jsonResponse({ ok: true, service: "workerops" });
+      return jsonResponse({
+        ok: true,
+        service: "workerops",
+        version: WORKEROPS_VERSION,
+      });
     }
 
     // Status — public. Both the page path and the /api/v1 path.
@@ -99,6 +116,33 @@ export async function handleOps(
     if (request.method === "GET" && sub === "/api/v1/auth-check") {
       requireToken(request, config);
       return jsonResponse({ ok: true, authorized: true, service: "workerops" });
+    }
+
+    // Update channel. Reading is public (the console shows it); changing it is
+    // an operation — it decides which code this guardian will install into
+    // itself — so it takes the token like any other operation.
+    if (request.method === "GET" && sub === "/api/v1/channel") {
+      const self = await getSelfState(env);
+      return jsonResponse({ channel: self.channel });
+    }
+    if (
+      (request.method === "PUT" || request.method === "POST") &&
+      sub === "/api/v1/channel"
+    ) {
+      requireToken(request, config);
+      const body = (await request.json().catch(() => ({}))) as {
+        channel?: string;
+      };
+      const wanted = String(body.channel || "").toLowerCase();
+      if (wanted !== "stable" && wanted !== "develop") {
+        throw new OpsError(
+          400,
+          "bad_channel",
+          'channel must be "stable" or "develop".',
+        );
+      }
+      const next = await setSelfState(env, { channel: wanted });
+      return jsonResponse({ ok: true, channel: next.channel });
     }
 
     // Operations — require WORKER_OPS_TOKEN. Both the page paths and /api/v1.
@@ -167,6 +211,15 @@ button.op.b-update:hover{background:#22c55e}
 .op .t b{font-size:15px;font-weight:700;color:#fff}
 .op .d{font-size:12px;color:#94a3b8;font-weight:400;line-height:1.5}
 .op.b-revert .d{color:#fed7aa}.op.b-rebuild .d{color:#dbeafe}.op.b-update .d{color:#bbf7d0}
+.chan{margin:14px 0 0;padding:12px 14px;border:1px solid #7c2d12;border-left:3px solid #f97316;border-radius:8px;background:#1a0f07}
+.chan .ct{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.chan .cl{font-size:13px;font-weight:700;color:#fdba74}
+.chan .cd{color:#94a3b8;font-size:11px;line-height:1.6;margin-top:6px}
+.chan .cd b{color:#fca5a5}
+.sw{position:relative;flex:0 0 auto;width:46px;height:26px;border-radius:13px;border:1px solid #475569;background:#1e293b;cursor:pointer;padding:0}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#94a3b8;transition:left .15s,background .15s}
+.sw[aria-checked="true"]{background:#ea580c;border-color:#f97316}
+.sw[aria-checked="true"]::after{left:22px;background:#fff}
 .safe{margin:14px 0 0;padding:12px 14px;border:1px solid #334155;border-left:3px solid #22c55e;border-radius:8px;background:#0b1220;color:#94a3b8;font-size:12px;line-height:1.7}
 .safe b{color:#e2e8f0;font-weight:700}
 .err{color:#f87171;font-size:12px;margin-top:10px;min-height:16px}
@@ -208,6 +261,10 @@ hr{border:0;border-top:1px solid #334155;margin:14px 0}
 <button class="op b-rebuild" onclick="act('reinstall')"><span class="ic"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="t"><b id="t_reinstall"></b><span class="d" id="d_reinstall"></span></span></button>
 <button class="op b-update" onclick="act('update')"><span class="ic"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></span><span class="t"><b id="t_update"></b><span class="d" id="d_update"></span></span></button>
 </div>
+<div class="chan">
+<div class="ct"><span class="cl" id="chanLabel"></span>
+<button class="sw" id="chanSw" role="switch" aria-checked="false" onclick="toggleChannel()" aria-label="develop"></button></div>
+<p class="cd" id="chanDesc"></p></div>
 <p class="safe" id="safeNote"></p>
 </div>
 <p class="foot"><a href="https://kuro.boo/" target="_blank" rel="noopener">WorkerOps: Kuro.Boo</a></p></div>
@@ -238,6 +295,20 @@ var STR={
   t_reinstall:'Rebuild',d_reinstall:'Worker を作り直して再インストールします',
   t_update:'Update',d_update:'GitHub Release より最新を取得して更新します',
   safe:'<b>この 3 つの操作が入れ替えるのは Worker（プログラム本体）だけです。</b>接続されている D1（データベース）・KV・R2（画像などのファイル）には一切書き込みません。記事・設定・アップロード済みのファイルはそのまま残り、バインディングも現在の設定を引き継ぎます。',
+  selfVer:'WorkerOps の版',selfChan:'更新チャンネル',selfCount:'自己更新の実行回数',
+  selfVerHint:'この復旧コンソール自身の版。新しい安定版が出ると{iv}時間ごとに自動で入れ替わります（利用者の操作は不要）。',
+  selfOffHint:'自己更新は無効です（OPS_WORKER_NAME 未設定）。自分の Worker 名が分からない guardian は自分を入れ替えません。',
+  selfCountHint:'成功 {n} 回 / 検証に失敗して戻した回数 {r} 回。最後: {at}',
+  selfCountHint0:'まだ一度も自己更新していません。',
+  selfState:'自己更新の状態',
+  chanLabel:'develop 版を受け入れる（非推奨）',
+  chanDesc:'<b>通常は OFF のままにしてください。</b>OFF のとき、この guardian は<b>安定版だけ</b>を自動で取り込みます。ON にすると検証前の prerelease まで取り込むため、<b>復旧コンソールごと壊れる可能性があります</b>（guardian が起動できない版に入れ替わると、内側から戻す手段がありません）。開発者が自分の instance で新版を試すためのスイッチです。',
+  chanOn:'develop（非推奨）',chanOff:'stable（推奨）',
+  chanConfirm:'develop 版の受け入れを ON にします。検証前の prerelease が自動で導入され、この復旧コンソールごと失われる可能性があります。続けますか？',
+  st_self_found:'新しい版を検出',st_self_read_active:'現在の version を確認',st_self_fetch:'新しい版を取得',
+  st_self_read_settings:'設定とバインディングを読み出し',st_self_upload:'新しい版をアップロード',
+  st_self_deploy:'新しい版を配備',st_self_verify:'公開URL越しに新版を検証',st_self_rollback:'自己更新を巻き戻し',
+  st_self_error:'自己更新でエラー',
   needtok:'操作には WORKER_OPS_TOKEN が必要です',confirm:'{op} を実行しますか？',
   dlgRunning:'実行中… この画面を閉じても処理は続きます',dlgWaiting:'サーバーの応答を待っています…',
   dlgDone:'完了しました',dlgFailed:'失敗しました',dlgTimeout:'画面の追跡を打ち切りました（処理はサーバー側で続いています）',
@@ -266,6 +337,20 @@ var STR={
   t_reinstall:'Rebuild',d_reinstall:'Recreate and reinstall the Worker',
   t_update:'Update',d_update:'Fetch and deploy the latest from GitHub Release',
   safe:'<b>These three operations replace the Worker (the program) and nothing else.</b> They never write to the D1 database, KV, or R2 bucket bound to it. Articles, settings and uploaded files stay exactly as they are, and the current bindings are carried over.',
+  selfVer:'WorkerOps version',selfChan:'update channel',selfCount:'self-updates',
+  selfVerHint:'The version of this recovery console itself. It replaces itself automatically when a new stable release appears (checked every {iv}h, no user action).',
+  selfOffHint:'Self-update is off (OPS_WORKER_NAME is unset). A guardian that cannot name itself never replaces itself.',
+  selfCountHint:'{n} succeeded / {r} rolled back after failing verification. Last: {at}',
+  selfCountHint0:'Has never self-updated.',
+  selfState:'self-update state',
+  chanLabel:'Accept develop builds (not recommended)',
+  chanDesc:'<b>Leave this OFF.</b> While off, this guardian installs <b>stable releases only</b>. Turning it on installs unvetted prereleases, which <b>can take the recovery console down with it</b> — if the guardian boots into a broken build, nothing inside can put it back. It exists so the developer can exercise a release on their own instance.',
+  chanOn:'develop (not recommended)',chanOff:'stable (recommended)',
+  chanConfirm:'This enables develop builds. Unvetted prereleases will be installed automatically and may take this recovery console with them. Continue?',
+  st_self_found:'New version found',st_self_read_active:'Read the live version',st_self_fetch:'Download the new version',
+  st_self_read_settings:'Read settings and bindings',st_self_upload:'Upload the new version',
+  st_self_deploy:'Deploy the new version',st_self_verify:'Verify the new version over the public URL',st_self_rollback:'Roll the self-update back',
+  st_self_error:'Self-update error',
   needtok:'A WORKER_OPS_TOKEN is required for operations',confirm:'Run {op}?',
   dlgRunning:'Running… closing this dialog does not stop it',dlgWaiting:'Waiting for the server…',
   dlgDone:'Finished',dlgFailed:'Failed',dlgTimeout:'Stopped following along (the server is still working)',
@@ -299,11 +384,38 @@ function applyLabels(){
  setText('t_update',t('t_update'));setText('d_update',t('d_update'));
  setText('dlgClose',t('close'));
  document.getElementById('safeNote').innerHTML=t('safe');
+ syncChannelUi((lastData&&lastData.self)||{});
  if(lastData){render(lastData);}else{setText('loading',t('loading'));}}
 function setLang(v){lang=v;try{localStorage.setItem('wo_lang',v);}catch(e){}applyLabels();if(tracking)renderSteps(lastData);}
 async function loadStatus(){setErr('');
  try{var r=await fetch(OPS+'/status');var d=await r.json();
  if(!r.ok){setErr(d.message||d.error||('HTTP '+r.status));return;}render(d);}catch(e){setErr(String(e));}}
+function selfRows(sf){
+ var iv=Math.max(1,Math.round((sf.intervalMs||0)/3600000));
+ var chan=sf.channel==='develop'?t('chanOn'):t('chanOff');
+ var cnt=sf.updateCount||0,rb=sf.rollbackCount||0;
+ var cntHint=(cnt||rb)?fill(t('selfCountHint'),{n:cnt,r:rb,at:esc(sf.lastUpdateAt||'—')}):t('selfCountHint0');
+ return rowH(t('selfVer'),esc(sf.version||'—'),sf.enabled?fill(t('selfVerHint'),{iv:iv}):t('selfOffHint'))+
+  row(t('selfChan'),esc(chan))+
+  rowH(t('selfCount'),'<span class="num '+(rb>0?'bad':'good')+'">'+cnt+'</span> '+t('unit'),cntHint)+
+  (sf.status&&sf.status!=='idle'?row(t('selfState'),esc(sf.status)+(sf.error?(' — '+esc(sf.error)):'')):'');}
+function syncChannelUi(sf){
+ var sw=document.getElementById('chanSw');if(!sw)return;
+ var on=(sf&&sf.channel)==='develop';
+ sw.setAttribute('aria-checked',on?'true':'false');
+ setText('chanLabel',t('chanLabel'));
+ document.getElementById('chanDesc').innerHTML=t('chanDesc');}
+async function toggleChannel(){setErr('');
+ if(!tok()){setErr(t('needtok'));return;}
+ var cur=(lastData&&lastData.self&&lastData.self.channel)||'stable';
+ var next=cur==='develop'?'stable':'develop';
+ if(next==='develop'&&!confirm(t('chanConfirm')))return;
+ try{var r=await fetch(OPS+'/api/v1/channel',{method:'PUT',
+  headers:{'authorization':'Bearer '+tok(),'content-type':'application/json'},
+  body:JSON.stringify({channel:next})});
+ var d=await r.json();
+ if(!r.ok){setErr(d.message||d.error||('HTTP '+r.status));return;}
+ loadStatus();}catch(e){setErr(String(e));}}
 function autoRevertRow(s){
  var n=s.autoRevertCount||0;
  var v='<span class="num '+(n>0?'bad':'good')+'">'+n+'</span> '+t('unit');
@@ -325,6 +437,7 @@ function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=
  row('app','<span class="dot" style="background:'+color+'"></span>'+(h.ok?t('up'):t('down'))+' (HTTP '+esc(h.status)+')')+
  row(t('running'),esc(h.version||'—'))+
  row(t('ustate'),esc(s.status||'—')+(s.error?(' — '+esc(s.error)):''))+
+ selfRows(d.self||{})+
  autoRevertRow(s)+
  incidentsRow(d.incidents)+
  row(t('active'),esc(cf.activeVersionId||'—'))+
@@ -340,6 +453,7 @@ function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=
  rowH(t('retryUpd'),esc(tn.retryMax)+' '+t('unit'),fill(t('retryUpdHint'),{n:esc(tn.retryMax)}))+
  rowH(t('retryRev'),esc(tn.revertRetryMax)+' '+t('unit'),fill(t('retryRevHint'),{n:esc(tn.revertRetryMax)}));
  var ot=document.getElementById('opTarget');if(ot)ot.textContent=t('optarget').replace('{name}',app.workerName||'—');
+ syncChannelUi(d.self||{});
  if(tracking)renderSteps(d);}
 function stepIcon(st){return st==='ok'?'✓':(st==='fail'?'✕':'●');}
 function renderSteps(d){
