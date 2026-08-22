@@ -290,7 +290,7 @@ var STR={
   times24None:'直近 24 時間、失敗した実行はありません（成功 {ok} 件）。',
   times24NA:'取得できません（{why}）。CF_API_TOKEN に Account Analytics:Read が必要です。',
   unit:'回',hours:'時間帯',
-  optarget:'対象 Worker（{name}）に対して操作します。（操作には WORKER_OPS_TOKEN が必要）',ph:'WORKER_OPS_TOKEN（操作に必要）',
+  optarget:'管理対象の App Worker に対して操作します。（Worker作成時に発行された WORKER_OPS_TOKEN が必要です）',ph:'WORKER_OPS_TOKEN（操作に必要）',
   t_revert:'Revert',d_revert:'現在の App Worker を直前の安定版に戻します',
   t_reinstall:'Rebuild',d_reinstall:'Worker を作り直して再インストールします',
   t_update:'Update',d_update:'GitHub Release より最新を取得して更新します',
@@ -332,7 +332,7 @@ var STR={
   times24None:'No failed invocations in the last 24h ({ok} succeeded).',
   times24NA:'Unavailable ({why}). CF_API_TOKEN needs Account Analytics:Read.',
   unit:'',hours:'hours',
-  optarget:'Operations target Worker ({name}). (a WORKER_OPS_TOKEN is required)',ph:'WORKER_OPS_TOKEN (required for operations)',
+  optarget:'Operations target the managed App Worker. (the WORKER_OPS_TOKEN issued when the Worker was created is required)',ph:'WORKER_OPS_TOKEN (required for operations)',
   t_revert:'Revert',d_revert:'Roll the App Worker back to the last stable version',
   t_reinstall:'Rebuild',d_reinstall:'Recreate and reinstall the Worker',
   t_update:'Update',d_update:'Fetch and deploy the latest from GitHub Release',
@@ -452,7 +452,7 @@ function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=
  row(t('hwin'),esc(tn.healthWindowMs)+'ms / '+esc(tn.healthIntervalMs)+'ms')+
  rowH(t('retryUpd'),esc(tn.retryMax)+' '+t('unit'),fill(t('retryUpdHint'),{n:esc(tn.retryMax)}))+
  rowH(t('retryRev'),esc(tn.revertRetryMax)+' '+t('unit'),fill(t('retryRevHint'),{n:esc(tn.revertRetryMax)}));
- var ot=document.getElementById('opTarget');if(ot)ot.textContent=t('optarget').replace('{name}',app.workerName||'—');
+ var ot=document.getElementById('opTarget');if(ot)ot.textContent=t('optarget');
  syncChannelUi(d.self||{});
  if(tracking)renderSteps(d);}
 function stepIcon(st){return st==='ok'?'✓':(st==='fail'?'✕':'●');}
