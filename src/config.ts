@@ -5,6 +5,7 @@ export interface Config {
   healthPath: string;
   migratePath: string | null;
   releaseSource: string;
+  releaseTagPrefix: string;
   releaseAsset: string;
   /** private リポジトリを読むときだけ使う。空なら未認証経路(既定)。 */
   githubToken: string;
@@ -46,6 +47,7 @@ export function loadConfig(env: Env): Config {
     healthPath: absPath(env.HEALTH_PATH, "/health"),
     migratePath: env.MIGRATE_PATH ? absPath(env.MIGRATE_PATH, "/migrate") : null,
     releaseSource: (env.RELEASE_SOURCE ?? "").trim(),
+    releaseTagPrefix: (env.RELEASE_TAG_PREFIX ?? "").trim(),
     releaseAsset: (env.RELEASE_ASSET ?? "worker.js").trim() || "worker.js",
     githubToken: (env.GITHUB_TOKEN ?? "").trim(),
     token: env.CF_API_TOKEN ?? "",

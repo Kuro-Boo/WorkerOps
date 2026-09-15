@@ -20,6 +20,12 @@ export interface Env {
   APP_WORKER_NAME: string;
   /** Release source for the app worker.js, e.g. GitHub "owner/repo". */
   RELEASE_SOURCE: string;
+  /**
+   * Tag prefix when RELEASE_SOURCE is a monorepo holding several components'
+   * releases (e.g. "Admin/" for tags like "Admin/v0.1.2"). Default: none.
+   * Needs GITHUB_TOKEN (the prefix is resolved through the releases list API).
+   */
+  RELEASE_TAG_PREFIX?: string;
   /** private リリースを読むための token。未設定なら未認証経路(public 用・既定)。 */
   GITHUB_TOKEN?: string;
   /** Release asset filename (default "worker.js"). */

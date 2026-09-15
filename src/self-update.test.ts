@@ -1,7 +1,7 @@
 // 契約テスト (node で直接実行: `npm run test:selfupdate`)。
 // 自己更新は「壊れた版に入れ替わると内側から戻せない」唯一の操作なので、
 // どの版を取りに行くかを決める 2 つの純粋関数を固定しておく。
-import { isNewer, parseAtomTag } from "./release-tag.ts";
+import { isNewer, parseAtomTag, pickRelease } from "./release-tag.ts";
 
 let failed = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -28,6 +28,20 @@ eq("v 有無を混ぜても比較できる", isNewer("0.1.7", "v0.1.6"), true);
 eq("壊れたタグは更新しない", isNewer("vX.Y.Z", "0.1.6"), false);
 eq("空文字は更新しない", isNewer("", "0.1.6"), false);
 eq("2 桁の比較が文字列順にならない", isNewer("v0.1.10", "0.1.9"), true);
+
+// ── pickRelease: モノレポの中から自分の部分の安定版を選ぶ ─────────────────
+// 同じ repo に他の部分のリリースも並ぶ。GitHub の "latest" は repo 全体の最新なので使えない。
+const list = [
+  { tag_name: "ID/v0.1.40", prerelease: false },
+  { tag_name: "Admin/v0.1.180", prerelease: true },
+  { tag_name: "Admin/v0.1.179", draft: true },
+  { tag_name: "Admin/vX", prerelease: false },
+  { tag_name: "Admin/v0.1.178", prerelease: false },
+  { tag_name: "Admin/v0.1.177", prerelease: false },
+];
+eq("接頭辞の中で最新の安定版", pickRelease(list, "Admin/")?.tag, "v0.1.178");
+eq("他の部分のタグは選ばない", pickRelease(list, "Mailer/"), null);
+eq("接頭辞なしは repo 全体の安定版", pickRelease([{ tag_name: "v1.2.3" }, { tag_name: "v1.2.2" }], "")?.tag, "v1.2.3");
 
 // ── parseAtomTag: develop チャンネルのタグ解決 ─────────────────────────
 const feed = `<?xml version="1.0" encoding="UTF-8"?>

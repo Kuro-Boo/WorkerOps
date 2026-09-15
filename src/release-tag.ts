@@ -26,6 +26,30 @@ export function isNewer(a: string, b: string): boolean {
 }
 
 /**
+ * Pick the newest stable release for one component of a monorepo.
+ *
+ * A monorepo publishes every component's releases in the same repository, so
+ * GitHub's own "latest" answers for the whole repo and can name another
+ * component's build. Releases carry a tag prefix instead (`Admin/v0.1.2`), and
+ * the guardian reads the list (newest first) and takes the first stable release
+ * whose tag has that prefix. Drafts, prereleases and malformed tags are skipped.
+ *
+ * With an empty prefix this is the plain "newest stable vX.Y.Z" rule.
+ */
+export function pickRelease<T extends { tag_name?: string; prerelease?: boolean; draft?: boolean }>(
+  releases: T[],
+  prefix: string,
+): (T & { tag: string }) | null {
+  for (const r of releases) {
+    const tag = r.tag_name || "";
+    if (r.draft || r.prerelease || !tag.startsWith(prefix)) continue;
+    const bare = tag.slice(prefix.length);
+    if (/^v\d+\.\d+\.\d+$/.test(bare)) return { ...r, tag: bare };
+  }
+  return null;
+}
+
+/**
  * Newest tag out of a GitHub releases atom feed (entries are newest-first).
  *
  * Used for the `develop` channel, which needs prereleases included — the

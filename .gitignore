@@ -6,16 +6,13 @@ dist/
 # secrets / local env (keep the .example only)
 .dev.vars
 .env*
+!.env*.example
 
 # AI / assistant files
-CLAUDE.md
-AGENTS.md
 .claude/
 
-# internal — not part of the public, reusable component
-*.sh
-docs/
-test/
+# 公開 repo へ出さないもの(CLAUDE.md・docs/・test/・*.sh など)は .publicignore にある。
+# モノレポでは追跡する。
 
 # os
 .DS_Store

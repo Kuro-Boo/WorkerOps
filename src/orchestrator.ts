@@ -12,6 +12,7 @@ import {
   appendEvent,
 } from "./state";
 import { probeHealth, runMigrate } from "./health";
+import { pickRelease } from "./release-tag";
 import { fetchRetry } from "./retry";
 import { nowIso, errMsg, sleep, OpsError } from "./util";
 
@@ -118,19 +119,39 @@ async function fetchReleaseWorkerViaApi(
     "X-GitHub-Api-Version": "2022-11-28",
   };
 
-  const relRes = await fetchRetry(
-    `https://api.github.com/repos/${repo}/releases/latest`,
-    { headers: { ...headers, Accept: "application/vnd.github+json" } },
-    retry,
-  );
-  if (!relRes.ok) throw new Error(`release lookup HTTP ${relRes.status}`);
-  const rel = (await relRes.json()) as {
+  type Rel = {
     tag_name?: string;
+    prerelease?: boolean;
+    draft?: boolean;
     assets?: { id: number; name: string }[];
   };
-  const tag = /^v\d+\.\d+\.\d+$/.test(rel.tag_name || "")
-    ? (rel.tag_name as string)
-    : "latest";
+  let rel: Rel;
+  let tag: string;
+  if (config.releaseTagPrefix) {
+    // A monorepo: /releases/latest names the newest release of ANY component,
+    // so read the list and take this component's newest stable one.
+    const listRes = await fetchRetry(
+      `https://api.github.com/repos/${repo}/releases?per_page=100`,
+      { headers: { ...headers, Accept: "application/vnd.github+json" } },
+      retry,
+    );
+    if (!listRes.ok) throw new Error(`release lookup HTTP ${listRes.status}`);
+    const picked = pickRelease((await listRes.json()) as Rel[], config.releaseTagPrefix);
+    if (!picked) throw new Error(`no stable release tagged ${config.releaseTagPrefix}vX.Y.Z`);
+    rel = picked;
+    tag = picked.tag;
+  } else {
+    const relRes = await fetchRetry(
+      `https://api.github.com/repos/${repo}/releases/latest`,
+      { headers: { ...headers, Accept: "application/vnd.github+json" } },
+      retry,
+    );
+    if (!relRes.ok) throw new Error(`release lookup HTTP ${relRes.status}`);
+    rel = (await relRes.json()) as Rel;
+    tag = /^v\d+\.\d+\.\d+$/.test(rel.tag_name || "")
+      ? (rel.tag_name as string)
+      : "latest";
+  }
 
   const asset = (rel.assets || []).find((a) => a.name === config.releaseAsset);
   if (!asset) throw new Error(`release asset ${config.releaseAsset} not found`);
