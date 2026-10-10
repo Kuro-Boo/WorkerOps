@@ -7,6 +7,8 @@ export interface Env {
   APP_SERVICE: Fetcher;
   /** KV namespace holding WorkerOps' own update state / lock (no app data). */
   WORKEROPS_STATE: KVNamespace;
+  /** App database used only for signed, additive release migrations. */
+  APP_DB?: D1Database;
 
   // ── Secrets ────────────────────────────────────────────────────────────
   /** Cloudflare API token (Workers Scripts:Edit) used to update/revert the app. */
@@ -18,8 +20,27 @@ export interface Env {
   CF_ACCOUNT_ID: string;
   /** Name of the app Worker script to deploy/revert via the CF API. */
   APP_WORKER_NAME: string;
-  /** Release source for the app worker.js, e.g. GitHub "owner/repo". */
-  RELEASE_SOURCE: string;
+  /**
+   * Product id at the release distribution endpoint. When set, updates come
+   * from `{UPDATE_ORIGIN}/v1/dist/{PRODUCT_ID}/…` and are applied only when the
+   * owner asks (or has turned automatic updates on).
+   */
+  PRODUCT_ID?: string;
+  /** Older name of PRODUCT_ID. Still read; prefer PRODUCT_ID. */
+  RELEASE_PRODUCT?: string;
+  /** Release distribution endpoint origin (default https://update.entamy.com). */
+  UPDATE_ORIGIN?: string;
+  /** Optional service binding to the distribution endpoint (same-zone deployments). */
+  UPDATE?: Fetcher;
+  /** "stable" (default) or "dev". Which channel pointer is offered to the owner. */
+  RELEASE_CHANNEL?: string;
+  /** JSON array of trusted Ed25519 release public keys. */
+  RELEASE_PUBKEYS?: string;
+  /**
+   * Legacy release source for the app worker.js, e.g. GitHub "owner/repo".
+   * Used only when PRODUCT_ID is not set.
+   */
+  RELEASE_SOURCE?: string;
   /**
    * Tag prefix when RELEASE_SOURCE is a monorepo holding several components'
    * releases (e.g. "Admin/" for tags like "Admin/v0.1.2"). Default: none.

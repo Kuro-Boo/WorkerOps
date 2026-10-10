@@ -3,6 +3,7 @@ import { loadConfig } from "./config";
 import { handleOps, maintenancePage } from "./ops";
 import { watchdogTick } from "./orchestrator";
 import { selfUpdateTick } from "./self-update";
+import { autoUpdateTick } from "./release-ops";
 
 export default {
   /** Front-of-app proxy + Ops endpoints. */
@@ -50,5 +51,7 @@ export default {
   ): Promise<void> {
     const config = loadConfig(env);
     ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
+    // Automatic updates: only when the owner switched them on (off by default).
+    ctx.waitUntil(autoUpdateTick(env, ctx as ExecutionContext, config).catch(() => {}));
   },
 };

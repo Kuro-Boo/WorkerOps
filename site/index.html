@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title data-i18n="meta.title">WorkerOps — Cloudflare Worker を安全・可逆に自己更新させる番人</title>
+<meta name="description" data-i18n-attr="content" data-i18n="meta.desc" content="任意の Cloudflare Worker の前段に置く小さな番人。更新・デプロイ後のヘルス検証・失敗時の自動 revert・復旧画面を引き受け、利用者に Cloudflare を直接操作させない。">
+<meta property="og:title" content="WorkerOps">
+<meta property="og:description" content="Cloudflare Worker を安全・可逆に自己更新させる番人 / A guardian that makes Cloudflare Worker self-updates safe and reversible.">
+<meta property="og:image" content="https://kuro.boo/workerops/img/recovery.jpg">
+<meta property="og:url" content="https://kuro.boo/workerops/">
+<link rel="canonical" href="https://kuro.boo/workerops/">
+<style>
+  :root {
+    --bg: #0b1020; --panel: #111a2e; --line: #243556; --ink: #e9eefc; --muted: #9aa8c7;
+    --blue: #1f5cff; --blue-2: #5b8cff; --orange: #e0662e; --green: #3fa45b;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.75 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  a { color: var(--blue-2); }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 20px; }
+  header.top { position: sticky; top: 0; z-index: 10; background: rgba(11,16,32,.9); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+  header.top .wrap { display: flex; align-items: center; gap: 16px; height: 56px; }
+  .brand { display: flex; align-items: center; font-weight: 800; font-size: 18px; color: var(--ink); text-decoration: none; }
+  .brand b { color: var(--blue-2); }
+  nav.links { display: flex; gap: 18px; margin-left: auto; font-size: 13px; }
+  nav.links a { color: var(--muted); text-decoration: none; }
+  nav.links a:hover { color: var(--ink); }
+  .lang { display: flex; gap: 4px; }
+  .lang a { font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); text-decoration: none; }
+  .lang a[aria-current="true"] { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .hero { padding: 64px 0 40px; display: grid; grid-template-columns: 1.1fr .9fr; gap: 40px; align-items: center; }
+  .logo-card { display: inline-block; background: #fff; border-radius: 14px; padding: 12px 20px; margin-bottom: 20px; }
+  .logo-card img { display: block; height: 40px; width: auto; }
+  h1 { font-size: clamp(26px, 3.2vw, 38px); line-height: 1.35; margin: 0 0 16px; }
+  .lead { color: var(--muted); font-size: 16px; margin: 0 0 24px; }
+  .cta { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 10px 18px; border-radius: 10px; font-weight: 700; text-decoration: none; font-size: 14px; }
+  .btn.primary { background: var(--blue); color: #fff; }
+  .btn.ghost { border: 1px solid var(--line); color: var(--ink); }
+  .shot img { width: 100%; height: auto; border-radius: 14px; border: 1px solid var(--line); box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+  .shot figcaption { color: var(--muted); font-size: 12px; margin-top: 8px; text-align: center; }
+  section { padding: 44px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 22px; margin: 0 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .card p { margin: 0; color: var(--muted); font-size: 14px; }
+  .ladder { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .step { border-radius: 12px; padding: 16px 18px; color: #fff; }
+  .step .n { font-size: 12px; opacity: .85; }
+  .step h3 { margin: 4px 0 6px; font-size: 16px; }
+  .step p { margin: 0; font-size: 14px; opacity: .95; }
+  .s1 { background: var(--orange); } .s2 { background: var(--blue); } .s3 { background: #37476b; }
+  .note { margin-top: 14px; color: var(--muted); font-size: 14px; border-left: 3px solid var(--orange); padding-left: 12px; }
+  .flow { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 20px; }
+  .node { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; text-align: center; min-width: 150px; }
+  .node small { display: block; color: var(--muted); font-size: 12px; }
+  .node.guard { border-color: var(--blue); box-shadow: 0 0 0 1px var(--blue) inset; }
+  .arrow { color: var(--muted); font-size: 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .tw { overflow-x: auto; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: #16213a; border: 1px solid var(--line); border-radius: 5px; padding: 1px 5px; }
+  pre { background: #0d1526; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.6; }
+  pre code { background: none; border: 0; padding: 0; }
+  ol.steps { padding-left: 20px; } ol.steps li { margin-bottom: 8px; }
+  footer { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--muted); font-size: 13px; }
+  footer .wrap { display: flex; gap: 16px; flex-wrap: wrap; justify-content: space-between; }
+  [data-lang] { display: none; }
+  html[lang="ja"] [data-lang="ja"], html[lang="en"] [data-lang="en"] { display: revert; }
+  @media (max-width: 820px) {
+    .hero { grid-template-columns: 1fr; padding-top: 40px; }
+    nav.links { display: none; }
+    .ladder { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="./">Worker<b>Ops</b></a>
+    <nav class="links">
+      <a href="#why" data-i18n="nav.why">なぜ必要か</a>
+      <a href="#features" data-i18n="nav.features">できること</a>
+      <a href="#contract" data-i18n="nav.contract">契約</a>
+      <a href="#start" data-i18n="nav.start">はじめ方</a>
+      <a href="https://github.com/Kuro-Boo/WorkerOps">GitHub</a>
+    </nav>
+    <div class="lang">
+      <a href="?lang=ja" data-set-lang="ja">日本語</a>
+      <a href="?lang=en" data-set-lang="en">English</a>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <div>
+      <div class="logo-card"><img src="img/logo.jpg" alt="WorkerOps" width="930" height="175"></div>
+      <h1 data-i18n="hero.title">Cloudflare Worker を、<br>安全に・戻せる形で自己更新させる番人。</h1>
+      <p class="lead" data-i18n="hero.lead">任意の Worker の前段に置く小さな Worker。更新の指示・デプロイ後のヘルス検証・失敗時の自動 revert・復旧画面を引き受け、利用者に Cloudflare を直接触らせません。実行時の依存はゼロ、成果物は gzip で約 8 KiB。</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/Kuro-Boo/WorkerOps" data-i18n="hero.github">GitHub で見る</a>
+        <a class="btn ghost" href="#start" data-i18n="hero.start">はじめ方</a>
+      </div>
+    </div>
+    <figure class="shot">
+      <img src="img/recovery.jpg" alt="WorkerOps Recovery" width="900" height="1243" loading="lazy">
+      <figcaption data-i18n="hero.caption">復旧画面 —— app が止まっていても、戻す・入れ直す・更新するをボタンで行えます</figcaption>
+    </figure>
+  </div>
+
+  <section id="why">
+    <h2 data-i18n="why.title">なぜ必要か</h2>
+    <p data-i18n="why.p1">Cloudflare Workers では、<strong>動いている Worker は自分自身を安全にロールバックできません。</strong>新しい版が壊れていると、ロールバックを実行する主体(その Worker 自身)ごと壊れるからです。</p>
+    <p data-i18n="why.p2">WorkerOps は「常に生きている小さな番人」として app の前に立ち、更新・検証・自動 revert・復旧をすべて引き受けます。番人自身はめったに更新しないので、app が壊れても戻す手段が残ります。</p>
+    <div class="flow" aria-hidden="true">
+      <div class="node"><span data-i18n="flow.user">利用者</span><small>https</small></div>
+      <div class="arrow">→</div>
+      <div class="node guard">WorkerOps<small data-i18n="flow.guard">番人(経路を持つ)</small></div>
+      <div class="arrow">→</div>
+      <div class="node">App Worker<small>Service Binding</small></div>
+    </div>
+    <p class="sub" data-i18n="why.p3">更新は GitHub Release の worker.js から取り、Cloudflare の Versions / Deployments API で配ります。</p>
+  </section>
+
+  <section id="features">
+    <h2 data-i18n="feat.title">できること</h2>
+    <div class="grid">
+      <div class="card"><h3 data-i18n="feat.proxy.t">転送</h3><p data-i18n="feat.proxy.d">自分の予約パス(既定 /__workerops__)以外を app へ転送。app が止まっていれば、メンテ画面と復旧画面を出します。</p></div>
+      <div class="card"><h3 data-i18n="feat.update.t">更新</h3><p data-i18n="feat.update.d">リリース元から新しい worker.js を取り、Cloudflare API でデプロイします。</p></div>
+      <div class="card"><h3 data-i18n="feat.verify.t">検証と自動 revert</h3><p data-i18n="feat.verify.d">デプロイ後にヘルスを確かめ、不健全なら直前の安定版(last-good)へ自動で戻します。新版が実際に応答するのを待ってから判定します(version-aware)。</p></div>
+      <div class="card"><h3 data-i18n="feat.console.t">復旧画面</h3><p data-i18n="feat.console.d">戻す・入れ直す・更新するをボタンで。外部の CSS / JS に頼らない1画面なので、app が止まっていても操作できます。</p></div>
+      <div class="card"><h3 data-i18n="feat.state.t">途中で落ちても続きから</h3><p data-i18n="feat.state.d">更新の各段階を自前の KV に記録。途中で落ちても、定期の見回り(Watchdog)が後始末をします。</p></div>
+      <div class="card"><h3 data-i18n="feat.retry.t">一過性の失敗を吸収</h3><p data-i18n="feat.retry.d">429・5xx・接続・タイムアウトは指数バックオフで再試行、認証などの恒久的な失敗は即中止。全操作は冪等です。</p></div>
+    </div>
+  </section>
+
+  <section id="ladder">
+    <h2 data-i18n="ladder.title">復旧の順番</h2>
+    <p class="sub" data-i18n="ladder.sub">2 つの操作は別の障害のためのものです。順番を間違えないこと。</p>
+    <div class="ladder">
+      <div class="step s1"><div class="n">1</div><h3 data-i18n="ladder.1.t">直前の安定版へ戻す</h3><p data-i18n="ladder.1.d">更新が原因の不調はこれが第一手。瞬時で、再アップロードは不要です。</p></div>
+      <div class="step s2"><div class="n">2</div><h3 data-i18n="ladder.2.t">リリースから入れ直す</h3><p data-i18n="ladder.2.d">Worker の消失・破損を直すためのもの。</p></div>
+      <div class="step s3"><div class="n">3</div><h3 data-i18n="ladder.3.t">手で直す</h3><p data-i18n="ladder.3.d">Cloudflare のダッシュボードやインストーラーから。最後の手段です。</p></div>
+    </div>
+    <p class="note" data-i18n="ladder.note">「入れ直す」を第一手にしないでください。更新が原因の不調では、同じ壊れたリリースを入れ直しても直りません。</p>
+  </section>
+
+  <section id="contract">
+    <h2 data-i18n="contract.title">app が満たす契約</h2>
+    <p class="sub" data-i18n="contract.sub">最大 2 つの口を用意するだけで WorkerOps に対応します。それ以外の挙動・データ・認証は app の自由です。</p>
+    <div class="tw"><table>
+      <tr><th data-i18n="contract.h1">区分</th><th data-i18n="contract.h2">口</th><th data-i18n="contract.h3">役割</th></tr>
+      <tr><td data-i18n="contract.req">必須</td><td><code>GET {HEALTH_PATH}</code></td><td data-i18n="contract.health"><code>200 {ok:true, version}</code> を返す。生死と、動いている版の判定に使います。</td></tr>
+      <tr><td data-i18n="contract.opt">任意</td><td><code>POST {MIGRATE_PATH}</code></td><td data-i18n="contract.migrate">保留中のマイグレーションを当てる(DB を持つ app が実装。追加のみ・後方互換)。</td></tr>
+    </table></div>
+  </section>
+
+  <section id="start">
+    <h2 data-i18n="start.title">はじめ方</h2>
+    <p class="sub" data-i18n="start.sub">WorkerOps を app の前段に置き、app の公開ルートを WorkerOps に向けます。</p>
+    <ol class="steps">
+      <li data-i18n="start.1"><code>wrangler.toml</code> を設定する —— 状態の KV(<code>WORKEROPS_STATE</code>)、前段にする app(<code>APP_SERVICE</code>)、<code>CF_ACCOUNT_ID</code>、<code>RELEASE_SOURCE</code>、<code>HEALTH_PATH</code>、公開ルート。</li>
+      <li data-i18n="start.2">Secret を入れる:</li>
+    </ol>
+<pre><code>wrangler secret put CF_API_TOKEN       # Workers Scripts:Edit + KV:Edit
+wrangler secret put WORKER_OPS_TOKEN   # auth for update / revert / reinstall</code></pre>
+    <ol class="steps" start="3">
+      <li data-i18n="start.3">配備する。app 側は上の契約(<code>GET {HEALTH_PATH}</code>)を実装します。</li>
+    </ol>
+    <h3 style="font-size:15px;margin-top:24px" data-i18n="api.title">REST API(AI・自動化向け)</h3>
+<pre><code># 状態(公開)
+curl https://&lt;host&gt;/__workerops__/api/v1/status
+# 最新へ更新(WORKER_OPS_TOKEN が要る)
+curl -X POST -H "Authorization: Bearer $WORKER_OPS_TOKEN" \
+  https://&lt;host&gt;/__workerops__/api/v1/update</code></pre>
+    <p class="sub" data-i18n="api.note">update / reinstall はすぐ応答し、検証と確定・自動 revert は背後で進みます。結果は /api/v1/status の state.status で確かめます。</p>
+  </section>
+
+  <section id="license">
+    <h2 data-i18n="license.title">ライセンス</h2>
+    <p data-i18n="license.p">Kuro License(MIT ＋ 帰属表示)。WorkerOps を公開の画面や利用者向けの画面で使うときは、フッター・About・ドキュメントなどに <strong>WorkerOps: Kuro.Boo</strong>(<a href="https://kuro.boo/">https://kuro.boo/</a> へのリンク付き)を表示してください。復旧画面にはこの表示が含まれています。</p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>© 2026 <a href="https://kuro.boo/">Kuro.Boo</a></span>
+    <span><a href="https://github.com/Kuro-Boo/WorkerOps">github.com/Kuro-Boo/WorkerOps</a></span>
+  </div>
+</footer>
+
+<script>
+// 言語は ?lang= が正(A §10.12: 公開ページの多言語は ?lang= に統一)。無ければブラウザの言語。
+(function () {
+  var EN = {
+    'meta.title': 'WorkerOps — A guardian that makes Cloudflare Worker self-updates safe and reversible',
+    'meta.desc': 'A tiny guardian Worker placed in front of any Cloudflare Worker. It handles updates, post-deploy health checks, automatic revert on failure and a recovery console — so users never have to touch Cloudflare directly.',
+    'nav.why': 'Why', 'nav.features': 'Features', 'nav.contract': 'Contract', 'nav.start': 'Get started',
+    'hero.title': 'A guardian that makes Cloudflare Worker<br>self-updates safe and reversible.',
+    'hero.lead': 'A tiny Worker you place in front of any Worker. It takes care of updates, post-deploy health verification, automatic revert on failure and a recovery console, so users never touch Cloudflare directly. Zero runtime dependencies, about 8 KiB gzipped.',
+    'hero.github': 'View on GitHub', 'hero.start': 'Get started',
+    'hero.caption': 'Recovery console — revert, reinstall and update with a button, even while the app is down',
+    'why.title': 'Why',
+    'why.p1': 'On Cloudflare Workers, <strong>a running Worker cannot safely roll itself back.</strong> If a new version is broken, the very thing that would perform the rollback — the Worker itself — is broken too.',
+    'why.p2': 'WorkerOps stands in front of the app as a small, always-alive guardian and takes over updates, verification, automatic revert and recovery. The guardian itself rarely changes, so a way back remains even when the app breaks.',
+    'flow.user': 'Users', 'flow.guard': 'guardian (owns the route)',
+    'why.p3': 'Updates come from worker.js in a GitHub Release and are deployed via the Cloudflare Versions / Deployments API.',
+    'feat.title': 'What it does',
+    'feat.proxy.t': 'Proxy', 'feat.proxy.d': 'Forwards everything except its reserved path (default /__workerops__) to the app. When the app is down, it shows a maintenance page and the recovery console.',
+    'feat.update.t': 'Update', 'feat.update.d': 'Fetches the new worker.js from the release source and deploys it through the Cloudflare API.',
+    'feat.verify.t': 'Verify & auto-revert', 'feat.verify.d': 'Checks health after deploying and automatically reverts to the last stable version (last-good) if unhealthy. It waits until the new version actually answers before judging (version-aware).',
+    'feat.console.t': 'Recovery console', 'feat.console.d': 'Revert, reinstall and update with a button. A single self-contained page with no external CSS/JS, so it works even while the app is down.',
+    'feat.state.t': 'Resumes after a crash', 'feat.state.d': 'Every stage of an update is journaled in its own KV. If it falls over midway, the scheduled Watchdog cleans up.',
+    'feat.retry.t': 'Absorbs transient failures', 'feat.retry.d': '429, 5xx, connection errors and timeouts are retried with exponential backoff; permanent failures such as auth errors stop immediately. Every operation is idempotent.',
+    'ladder.title': 'Recovery ladder', 'ladder.sub': 'The two operations are for different failures. Do not mix up the order.',
+    'ladder.1.t': 'Revert to last-good', 'ladder.1.d': 'The first move for problems caused by an update. Instant, no re-upload.',
+    'ladder.2.t': 'Reinstall from a release', 'ladder.2.d': 'For a Worker that is missing or corrupted.',
+    'ladder.3.t': 'Fix by hand', 'ladder.3.d': 'From the Cloudflare dashboard or the installer. The last resort.',
+    'ladder.note': 'Do not reach for reinstall first. If an update caused the problem, reinstalling the same broken release will not fix it.',
+    'contract.title': 'The contract your app implements', 'contract.sub': 'Provide at most two endpoints and your app works with WorkerOps. Everything else — behavior, data, auth — is up to the app.',
+    'contract.h1': 'Kind', 'contract.h2': 'Endpoint', 'contract.h3': 'Role', 'contract.req': 'Required', 'contract.opt': 'Optional',
+    'contract.health': 'Return <code>200 {ok:true, version}</code>. Used to judge liveness and the running version.',
+    'contract.migrate': 'Apply pending migrations (implemented by apps that own a DB; additive-only and backward compatible).',
+    'start.title': 'Get started', 'start.sub': 'Place WorkerOps in front of your app and point the app’s public route at WorkerOps.',
+    'start.1': 'Configure <code>wrangler.toml</code> — the state KV (<code>WORKEROPS_STATE</code>), the app to front (<code>APP_SERVICE</code>), <code>CF_ACCOUNT_ID</code>, <code>RELEASE_SOURCE</code>, <code>HEALTH_PATH</code> and the public route.',
+    'start.2': 'Put the secrets:', 'start.3': 'Deploy. On the app side, implement the contract above (<code>GET {HEALTH_PATH}</code>).',
+    'api.title': 'REST API (for AI & automation)',
+    'api.note': 'update / reinstall answer right away; verification, confirmation and auto-revert continue in the background. Check the outcome in state.status of /api/v1/status.',
+    'license.title': 'License',
+    'license.p': 'Kuro License (MIT + attribution). When you use WorkerOps in a public or user-facing interface, show <strong>WorkerOps: Kuro.Boo</strong> (linked to <a href="https://kuro.boo/">https://kuro.boo/</a>) in an appropriate place such as the footer, About screen or documentation. The recovery console already includes it.',
+  };
+  var q = new URLSearchParams(location.search).get('lang');
+  var lang = q === 'en' || q === 'ja' ? q : ((navigator.language || 'ja').toLowerCase().indexOf('ja') === 0 ? 'ja' : 'en');
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-set-lang]').forEach(function (a) {
+    a.setAttribute('aria-current', a.getAttribute('data-set-lang') === lang ? 'true' : 'false');
+  });
+  if (lang !== 'en') return;
+  document.querySelectorAll('[data-i18n]').forEach(function (n) {
+    var v = EN[n.getAttribute('data-i18n')];
+    if (v === undefined) return;
+    var attr = n.getAttribute('data-i18n-attr');
+    if (attr) n.setAttribute(attr, v); else if (n.tagName === 'TITLE') n.textContent = v; else n.innerHTML = v;
+  });
+})();
+</script>
+</body>
+</html>

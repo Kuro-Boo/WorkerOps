@@ -4,6 +4,14 @@ export interface Config {
   opsPath: string;
   healthPath: string;
   migratePath: string | null;
+  /**
+   * Product id at the release distribution endpoint. When set, the app is
+   * updated from `{UPDATE_ORIGIN}/v1/dist/{productId}/…` (signed, version-pinned)
+   * instead of RELEASE_SOURCE, and only when the owner asks for it.
+   */
+  productId: string;
+  /** Channel whose pointer is offered to the owner ("stable" unless set). */
+  releaseChannel: "stable" | "dev";
   releaseSource: string;
   releaseTagPrefix: string;
   releaseAsset: string;
@@ -46,6 +54,10 @@ export function loadConfig(env: Env): Config {
     opsPath: absPath(env.OPS_PATH, "/__workerops__"),
     healthPath: absPath(env.HEALTH_PATH, "/health"),
     migratePath: env.MIGRATE_PATH ? absPath(env.MIGRATE_PATH, "/migrate") : null,
+    // RELEASE_PRODUCT is the older name of PRODUCT_ID; both are read so that
+    // guardians installed before the rename keep working.
+    productId: (env.PRODUCT_ID ?? env.RELEASE_PRODUCT ?? "").trim(),
+    releaseChannel: (env.RELEASE_CHANNEL ?? "").trim().toLowerCase() === "dev" ? "dev" : "stable",
     releaseSource: (env.RELEASE_SOURCE ?? "").trim(),
     releaseTagPrefix: (env.RELEASE_TAG_PREFIX ?? "").trim(),
     releaseAsset: (env.RELEASE_ASSET ?? "worker.js").trim() || "worker.js",

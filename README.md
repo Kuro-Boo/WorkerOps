@@ -58,7 +58,8 @@ WorkerOps は「常に生きている小さな番人」として app Worker の�
 | `APP_SERVICE` | Service Binding | app への転送・ヘルス検証・migrate 先 |
 | `CF_API_TOKEN` | Secret | CF API で app を更新・revert（`Workers Scripts:Edit`） |
 | `CF_ACCOUNT_ID` / `APP_WORKER_NAME` | env | 更新/revert 対象の特定 |
-| `RELEASE_SOURCE` | env | `worker.js` の取得元（例: GitHub `owner/repo`） |
+| `PRODUCT_ID` | env | 配布元（`UPDATE_ORIGIN`、既定 `https://update.entamy.com`）での製品名。設定すると、更新は `/v1/dist/{PRODUCT_ID}/…` から署名済み・版固定で取り、**持ち主が「更新」を押したとき（または自動更新を入にしたとき）だけ**適用する。取れる版は `GET {OPS_PATH}/api/v1/release`、自動更新の切り替えは `PUT {OPS_PATH}/api/v1/release/auto`（トークン必須・既定は切） |
+| `RELEASE_SOURCE` | env | `PRODUCT_ID` が無いときだけ使う、`worker.js` の取得元（例: GitHub `owner/repo`） |
 | `OPS_PATH` | env | 予約パス接頭辞（既定 `/__workerops__`） |
 | `HEALTH_PATH` / `MIGRATE_PATH` | env | app のヘルス／マイグレーション実行パス |
 | `WORKER_OPS_TOKEN` | Secret | Ops ページ/エンドポイント認証（app 非依存で常に有効） |

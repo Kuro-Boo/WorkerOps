@@ -1,3 +1,4 @@
+import { applyRelease, releaseInfo, setAuto } from "./release-ops";
 import type { Env } from "./types";
 import type { Config } from "./config";
 import { getState, getSelfState, setSelfState } from "./state";
@@ -38,7 +39,7 @@ export async function handleOps(
     // Status payload (public). Shared by the recovery page and the REST API.
     const status = async (): Promise<Response> => {
       ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
-      const [state, self, activeVersionId, health, incidents] = await Promise.all([
+      const [state, self, activeVersionId, health, incidents, release] = await Promise.all([
         getState(env),
         getSelfState(env),
         new CfClient(config.token, config.accountId, config.appWorkerName, {
@@ -49,6 +50,7 @@ export async function handleOps(
           .catch(() => null),
         probeHealth(env, config).catch(() => ({ ok: false, status: 0 })),
         fetchAppIncidents(config),
+        config.productId ? releaseInfo(env, config).catch(() => null) : Promise.resolve(null),
       ]);
       return jsonResponse({
         app: {
@@ -79,6 +81,7 @@ export async function handleOps(
         cf: { activeVersionId },
         health,
         incidents,
+        release,
       });
     };
 
@@ -145,13 +148,35 @@ export async function handleOps(
       return jsonResponse({ ok: true, channel: next.channel });
     }
 
+    // Release offered by the distribution endpoint (PRODUCT_ID set). Public,
+    // like status: it says which version could be installed — nothing more.
+    if (request.method === "GET" && sub === "/api/v1/release") {
+      if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
+      return jsonResponse(await releaseInfo(env, config));
+    }
+    // Automatic updates are the owner's choice: off unless the token holder turns them on.
+    if ((request.method === "PUT" || request.method === "POST") && sub === "/api/v1/release/auto") {
+      requireToken(request, config);
+      if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
+      const body = (await request.json().catch(() => ({}))) as { enabled?: unknown };
+      if (typeof body.enabled !== "boolean") throw new OpsError(400, "bad_request", "enabled must be true or false.");
+      return jsonResponse({ ok: true, ...(await setAuto(env, body.enabled)) });
+    }
+
     // Operations — require WORKER_OPS_TOKEN. Both the page paths and /api/v1.
+    // With PRODUCT_ID the version comes from the distribution endpoint: the one the
+    // owner named in the body, or the offered one the console displayed.
     if (request.method === "POST" && (sub === "/update" || sub === "/api/v1/update")) {
       requireToken(request, config);
+      if (config.productId) {
+        const body = (await request.json().catch(() => ({}))) as { version?: unknown };
+        return applyRelease(env, ctx, config, typeof body.version === "string" ? body.version : undefined);
+      }
       return jsonResponse(await deployLatest(env, ctx, config, "update"));
     }
     if (request.method === "POST" && (sub === "/reinstall" || sub === "/api/v1/reinstall")) {
       requireToken(request, config);
+      if (config.productId) return applyRelease(env, ctx, config, undefined, true);
       return jsonResponse(await deployLatest(env, ctx, config, "reinstall"));
     }
     if (request.method === "POST" && (sub === "/revert" || sub === "/api/v1/revert")) {
@@ -277,6 +302,7 @@ hr{border:0;border-top:1px solid #334155;margin:14px 0}
 var OPS=${ops};
 var STR={
  ja:{sub:'管理 Worker のステータス（自動表示）— 操作にはトークンが必要',loading:'読み込み中…',up:'稼働中',down:'応答なし',
+  avail:'利用できる版',avail_new:'新しい版があります',avail_cur:'最新です',avail_unk:'確認できませんでした',avail_auto:'自動更新',on:'入',off:'切',
   running:'稼働 version',ustate:'更新状態',active:'CF active version',lastgood:'last-good',fromto:'from → to',
   prev:'prev app version',intended:'intended release',times:'開始 / 確定 / 終了',worker:'app worker',
   release:'release source',hm:'health / migrate',hwin:'health 窓 / 間隔',
@@ -293,7 +319,7 @@ var STR={
   optarget:'管理対象の App Worker に対して操作します。（Worker作成時に発行された WORKER_OPS_TOKEN が必要です）',ph:'WORKER_OPS_TOKEN（操作に必要）',
   t_revert:'Revert',d_revert:'現在の App Worker を直前の安定版に戻します',
   t_reinstall:'Rebuild',d_reinstall:'Worker を作り直して再インストールします',
-  t_update:'Update',d_update:'GitHub Release より最新を取得して更新します',
+  t_update:'Update',d_update:'配布元から版を取得して更新します（押したときだけ）',
   safe:'<b>この 3 つの操作が入れ替えるのは Worker（プログラム本体）だけです。</b>接続されている D1（データベース）・KV・R2（画像などのファイル）には一切書き込みません。記事・設定・アップロード済みのファイルはそのまま残り、バインディングも現在の設定を引き継ぎます。',
   selfVer:'WorkerOps の版',selfChan:'更新チャンネル',selfCount:'自己更新の実行回数',
   selfVerHint:'この復旧コンソール自身の版。新しい安定版が出ると{iv}時間ごとに自動で入れ替わります（利用者の操作は不要）。',
@@ -319,6 +345,7 @@ var STR={
   st_verify:'health による検証',st_migrate:'マイグレーションを実行',st_confirm:'確定（last-good を更新）',
   st_revert:'巻き戻し',st_auto_revert:'自動巻き戻し',st_watchdog:'watchdog による点検',st_aborted:'中止'},
  en:{sub:'Managed Worker status (auto) — operations require a token',loading:'Loading…',up:'up',down:'down',
+  avail:'offered version',avail_new:'a newer version is available',avail_cur:'up to date',avail_unk:'could not check',avail_auto:'automatic updates',on:'on',off:'off',
   running:'running version',ustate:'update state',active:'CF active version',lastgood:'last-good',fromto:'from → to',
   prev:'prev app version',intended:'intended release',times:'started / confirmed / finished',worker:'app worker',
   release:'release source',hm:'health / migrate',hwin:'health window / interval',
@@ -335,7 +362,7 @@ var STR={
   optarget:'Operations target the managed App Worker. (the WORKER_OPS_TOKEN issued when the Worker was created is required)',ph:'WORKER_OPS_TOKEN (required for operations)',
   t_revert:'Revert',d_revert:'Roll the App Worker back to the last stable version',
   t_reinstall:'Rebuild',d_reinstall:'Recreate and reinstall the Worker',
-  t_update:'Update',d_update:'Fetch and deploy the latest from GitHub Release',
+  t_update:'Update',d_update:'Fetch and deploy a release from the distribution source (only when you press it)',
   safe:'<b>These three operations replace the Worker (the program) and nothing else.</b> They never write to the D1 database, KV, or R2 bucket bound to it. Articles, settings and uploaded files stay exactly as they are, and the current bindings are carried over.',
   selfVer:'WorkerOps version',selfChan:'update channel',selfCount:'self-updates',
   selfVerHint:'The version of this recovery console itself. It replaces itself automatically when a new stable release appears (checked every {iv}h, no user action).',
@@ -431,11 +458,16 @@ function incidentsRow(inc){
  var hint=fill(t('times24Hint'),{n:n,ok:inc.succeeded||0,h:inc.affectedHours||0,last:esc(inc.lastFailureHour||'—')});
  if(parts.length)hint+=' / '+parts.join(', ');
  return rowH(t('times24'),v,hint);}
+function releaseRow(r){if(!r)return '';
+ var o=r.offered,state=!r.checkOk?t('avail_unk'):(r.newer?t('avail_new'):t('avail_cur'));
+ var sev=o&&o.severity&&o.severity!=='normal'?(' ['+esc(o.severity)+']'):'';
+ return row(t('avail'),(o?esc(o.version)+sev+' — ':'')+esc(state)+' ('+esc(r.channel)+')')+row(t('avail_auto'),r.auto?t('on'):t('off'));}
 function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=d.tunables||{},cf=d.cf||{};
  var color=h.ok?'#22c55e':'#ef4444';
  document.getElementById('status').innerHTML=
  row('app','<span class="dot" style="background:'+color+'"></span>'+(h.ok?t('up'):t('down'))+' (HTTP '+esc(h.status)+')')+
  row(t('running'),esc(h.version||'—'))+
+ releaseRow(d.release)+
  row(t('ustate'),esc(s.status||'—')+(s.error?(' — '+esc(s.error)):''))+
  selfRows(d.self||{})+
  autoRevertRow(s)+
@@ -490,7 +522,9 @@ async function act(name){setErr('');if(!tok()){setErr(t('needtok'));return;}
  tracking.timer=setInterval(function(){
   if(tracking&&Date.now()-tracking.started>180000){setText('dlgRes',t('dlgTimeout'));stopTracking();return;}
   loadStatus();},1500);
- try{var r=await fetch(OPS+'/'+name,{method:'POST',headers:{'authorization':'Bearer '+tok()}});var d=await r.json();
+ // Update names the version the console displayed — never "whatever is newest when the request lands".
+ var rel=lastData&&lastData.release,body=(name==='update'&&rel&&rel.offered)?JSON.stringify({version:rel.offered.version}):undefined;
+ try{var r=await fetch(OPS+'/'+name,{method:'POST',headers:body?{'authorization':'Bearer '+tok(),'content-type':'application/json'}:{'authorization':'Bearer '+tok()},body:body});var d=await r.json();
  if(tracking)tracking.posted=true;
  if(!r.ok){setErr(d.message||d.error||('HTTP '+r.status));setText('dlgRes',t('dlgFailed')+' — '+esc(d.message||d.error||('HTTP '+r.status)));stopTracking();}
  loadStatus();}catch(e){setErr(String(e));setText('dlgRes',t('dlgFailed')+' — '+String(e));stopTracking();}}
