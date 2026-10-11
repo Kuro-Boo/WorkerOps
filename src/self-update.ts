@@ -203,7 +203,7 @@ export type SelfCheckResult =
     };
 
 /**
- * Check now, without waiting for the 6-hour window (POST /api/v1/self/check).
+ * Check now, without waiting for the 3-hour window (POST /api/v1/self/check).
  *
  * For an urgent fix: it only brings the check forward. What gets installed is
  * exactly what the tick would install — a strictly newer release on this

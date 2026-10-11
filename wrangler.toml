@@ -32,7 +32,7 @@ CF_ACCOUNT_ID = "replace-with-account-id"
 #   させないための、意図的に安全側の既定（壊れた版に入れ替わると復旧コンソール
 #   ごと失われ、内側から戻す手段が無くなる）。
 # SELF_RELEASE_SOURCE = "Kuro-Boo/WorkerOps"   # 既定
-# SELF_UPDATE_INTERVAL_MS = "21600000"          # 既定 6h（±10% のジッター付き）
+# SELF_UPDATE_INTERVAL_MS = "10800000"          # 既定 3h（±10% のジッター付き）
 # SELF_UPDATE = "0"                             # 明示的に自己更新を止める
 
 # Optional tunables: RETRY_MAX, RETRY_BASE_MS, REVERT_RETRY_MAX,

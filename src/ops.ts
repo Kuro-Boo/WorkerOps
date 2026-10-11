@@ -149,7 +149,7 @@ export async function handleOps(
       return jsonResponse({ ok: true, channel: next.channel });
     }
 
-    // Check for a newer WorkerOps now, without waiting for the 6-hour window
+    // Check for a newer WorkerOps now, without waiting for the 3-hour window
     // (for urgent fixes). Same release, same safeguards as the periodic check —
     // it only brings the check forward. Waits for the result.
     if (request.method === "POST" && sub === "/api/v1/self/check") {

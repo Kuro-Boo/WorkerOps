@@ -75,7 +75,7 @@ export function loadConfig(env: Env): Config {
     opsWorkerName: (env.OPS_WORKER_NAME ?? "").trim(),
     selfReleaseSource:
       (env.SELF_RELEASE_SOURCE ?? "").trim() || "Kuro-Boo/WorkerOps",
-    selfUpdateIntervalMs: int(env.SELF_UPDATE_INTERVAL_MS, 6 * 60 * 60 * 1000),
+    selfUpdateIntervalMs: int(env.SELF_UPDATE_INTERVAL_MS, 3 * 60 * 60 * 1000),
     // Named AND not explicitly switched off. Both conditions, because the
     // failure mode of a bad self-update is "no way back from inside".
     selfUpdateEnabled:

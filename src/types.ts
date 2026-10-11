@@ -68,7 +68,7 @@ export interface Env {
   OPS_WORKER_NAME?: string;
   /** Repo holding WorkerOps' own releases (default "Kuro-Boo/WorkerOps"). */
   SELF_RELEASE_SOURCE?: string;
-  /** How often to look for a new WorkerOps release (default 6h). */
+  /** How often to look for a new WorkerOps release (default 3h). */
   SELF_UPDATE_INTERVAL_MS?: string;
   /** Set to "0"/"false" to switch self-update off even when named. */
   SELF_UPDATE?: string;
