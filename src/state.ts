@@ -1,5 +1,6 @@
 import type { Env } from "./types";
 import { nowIso } from "./util";
+import { reportDefect } from "./defects";
 
 export type UpdateStatus =
   | "idle"
@@ -95,13 +96,48 @@ export async function setState(
   env: Env,
   patch: Partial<UpdateState>,
 ): Promise<UpdateState> {
+  const prev = await getState(env);
   const next: UpdateState = {
-    ...(await getState(env)),
+    ...prev,
     ...patch,
     updatedAt: nowIso(),
   };
   await env.WORKEROPS_STATE.put(STATE_KEY, JSON.stringify(next));
+  // Failures go to Entamy Defects, once per transition (defects.ts).
+  const code = appFailureCode(prev, patch);
+  if (code) {
+    await reportDefect(env, code, {
+      operation: next.operation,
+      step: lastFailedStep(next.events),
+      release: next.intendedRelease,
+    });
+  }
   return next;
+}
+
+/** Which failure, if any, this write records. A human pressing Revert is not one. */
+export function appFailureCode(
+  prev: UpdateState,
+  patch: Partial<UpdateState>,
+):
+  | "workerops_app_failed_predeploy"
+  | "workerops_app_auto_reverted"
+  | "workerops_app_manual_required"
+  | null {
+  if (!patch.status || patch.status === prev.status) return null;
+  if (patch.status === "failed_predeploy") return "workerops_app_failed_predeploy";
+  if (patch.status === "manual_required") return "workerops_app_manual_required";
+  // Only automatic reverts carry the counter (orchestrator.revertTo).
+  if (patch.status === "reverted" && patch.autoRevertCount !== undefined)
+    return "workerops_app_auto_reverted";
+  return null;
+}
+
+/** The step key of the last failed step in the journal (a token, not text). */
+export function lastFailedStep(events: OpEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i--)
+    if (events[i]?.state === "fail") return events[i]!.step;
+  return null;
 }
 
 /** Begin a fresh journal for `operation`, discarding the previous run's steps. */
@@ -253,12 +289,21 @@ export async function setSelfState(
   env: Env,
   patch: Partial<SelfState>,
 ): Promise<SelfState> {
+  const prev = await getSelfState(env);
   const next: SelfState = {
-    ...(await getSelfState(env)),
+    ...prev,
     ...patch,
     updatedAt: nowIso(),
   };
   await env.WORKEROPS_STATE.put(SELF_KEY, JSON.stringify(next));
+  if (patch.status && patch.status !== prev.status &&
+      (patch.status === "rolled_back" || patch.status === "failed")) {
+    await reportDefect(
+      env,
+      patch.status === "rolled_back" ? "workerops_self_rolled_back" : "workerops_self_failed",
+      { channel: next.channel, target: next.targetTag, step: lastFailedStep(next.events) },
+    );
+  }
   return next;
 }
 

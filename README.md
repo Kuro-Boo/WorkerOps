@@ -64,8 +64,17 @@ WorkerOps は「常に生きている小さな番人」として app Worker の�
 | `HEALTH_PATH` / `MIGRATE_PATH` | env | app のヘルス／マイグレーション実行パス |
 | `WORKER_OPS_TOKEN` | Secret | Ops ページ/エンドポイント認証（app 非依存で常に有効） |
 | `WORKEROPS_STATE` | KV | version 状態・更新ログ |
+| `DEFECTS` | env（任意） | `off` で失敗の知らせ（下記）を止める。既定は送る |
 
 > app に紐づく D1/KV/R2/Assets バインドは **app Worker 側**に付けます。WorkerOps は持ちません。
+
+### 失敗の知らせ（Entamy Defects）
+
+更新や自己更新が**失敗したときだけ**、`https://defects.entamy.com/v1/defects` へ1件送ります（成功や「新しい版なし」は送りません）。
+送るのは符号と版だけです: 失敗の種類（`workerops_self_rolled_back` / `workerops_self_failed` / `workerops_app_failed_predeploy` /
+`workerops_app_auto_reverted` / `workerops_app_manual_required`）、WorkerOps の版、失敗した段、狙った版、チャンネル、`PRODUCT_ID`。
+エラーの文・URL・ホスト名・アカウント ID は送りません（導入の名乗りは `CF_ACCOUNT_ID` と Worker 名のハッシュ）。
+止めるには `DEFECTS = "off"`。報告が届かなくても WorkerOps の動きは変わりません。
 
 ## Recovery ladder（復旧ラダー）
 
@@ -102,6 +111,7 @@ AI やスクリプトから操作できる REST API。前段の app（例: KuroC
 | POST | `{OPS_PATH}/api/v1/update` | `Bearer WORKER_OPS_TOKEN` | 最新リリースへ更新 |
 | POST | `{OPS_PATH}/api/v1/reinstall` | `Bearer WORKER_OPS_TOKEN` | 再導入（修復） |
 | POST | `{OPS_PATH}/api/v1/revert` | `Bearer WORKER_OPS_TOKEN` | 直前の安定版へ revert |
+| POST | `{OPS_PATH}/api/v1/self/check` | `Bearer WORKER_OPS_TOKEN` | WorkerOps 自身の新しい版を今すぐ確かめ、あれば入れ替える（3 時間の窓を待たない・1 分に 1 回まで） |
 
 ```bash
 # 最新へ更新（AI / CLI）

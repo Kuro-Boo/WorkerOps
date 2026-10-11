@@ -34,6 +34,7 @@ CF_ACCOUNT_ID = "replace-with-account-id"
 # SELF_RELEASE_SOURCE = "Kuro-Boo/WorkerOps"   # 既定
 # SELF_UPDATE_INTERVAL_MS = "10800000"          # 既定 3h（±10% のジッター付き）
 # SELF_UPDATE = "0"                             # 明示的に自己更新を止める
+# DEFECTS = "off"                              # 失敗の知らせ(Entamy Defects)を止める
 
 # Optional tunables: RETRY_MAX, RETRY_BASE_MS, REVERT_RETRY_MAX,
 # HEALTH_WINDOW_MS, HEALTH_INTERVAL_MS, UPDATE_LOCK_TTL_MS, BINDING_TYPES

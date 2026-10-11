@@ -65,6 +65,8 @@ export interface Env {
    * itself, and "off" is the only safe default for a component whose failure
    * has no in-band recovery.
    */
+  /** "off" stops failure reports to Entamy Defects (sent by default). */
+  DEFECTS?: string;
   OPS_WORKER_NAME?: string;
   /** Repo holding WorkerOps' own releases (default "Kuro-Boo/WorkerOps"). */
   SELF_RELEASE_SOURCE?: string;

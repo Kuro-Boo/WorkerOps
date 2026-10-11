@@ -1,6 +1,6 @@
 {
   "name": "workerops",
-  "version": "0.1.14",
+  "version": "0.1.15",
   "description": "Generic guardian Worker that fronts a Cloudflare Worker to make self-updates safe and reversible (deploy / health-verify / auto-revert / recovery UI).",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.txt",
@@ -31,7 +31,8 @@
     "test:selfupdate": "node src/self-update.test.ts",
     "test:release": "esbuild src/signed-release.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/signed-release-test.mjs && node .wrangler/signed-release-test.mjs",
     "test:selfcheck": "esbuild src/self-check.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/self-check-test.mjs && node .wrangler/self-check-test.mjs",
-    "test": "npm run test:bindings && npm run test:selfupdate && npm run test:release && npm run test:selfcheck",
+    "test:defects": "esbuild src/defects.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/defects-test.mjs && node .wrangler/defects-test.mjs",
+    "test": "npm run test:bindings && npm run test:selfupdate && npm run test:release && npm run test:selfcheck && npm run test:defects",
     "release:bundle": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.js --minify",
     "release:publish": "./ops/publish-entamy-release.sh"
   },
