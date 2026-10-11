@@ -6,6 +6,7 @@ import { deployLatest, runRevert, watchdogTick } from "./orchestrator";
 import { probeHealth } from "./health";
 import { fetchAppIncidents } from "./incidents";
 import { WORKEROPS_VERSION } from "./version";
+import { selfCheckNow } from "./self-update";
 import { CfClient } from "./cf";
 import { jsonResponse, constantTimeEqual, OpsError } from "./util";
 
@@ -146,6 +147,26 @@ export async function handleOps(
       }
       const next = await setSelfState(env, { channel: wanted });
       return jsonResponse({ ok: true, channel: next.channel });
+    }
+
+    // Check for a newer WorkerOps now, without waiting for the 6-hour window
+    // (for urgent fixes). Same release, same safeguards as the periodic check —
+    // it only brings the check forward. Waits for the result.
+    if (request.method === "POST" && sub === "/api/v1/self/check") {
+      requireToken(request, config);
+      const r = await selfCheckNow(env, config, new URL(request.url).origin);
+      if (!r.ok) {
+        const status = r.error === "too_soon" ? 429 : 409;
+        throw new OpsError(status, r.error, {
+          self_update_disabled: "Self-update is off for this guardian (OPS_WORKER_NAME missing or SELF_UPDATE off).",
+          too_soon: "Checked less than a minute ago. Try again shortly.",
+          busy: "An app update or another self-update is in progress.",
+        }[r.error]);
+      }
+      const self = await getSelfState(env);
+      // This isolate still runs the old code; after an update the running version is the one found.
+      const version = r.outcome === "updated" && r.found ? r.found.replace(/^v/, "") : r.before;
+      return jsonResponse({ ...r, version, events: self.events });
     }
 
     // Release offered by the distribution endpoint (PRODUCT_ID set). Public,

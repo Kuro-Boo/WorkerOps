@@ -180,12 +180,87 @@ export async function selfUpdateTick(
   // account, and a self-update mid-app-update would swap out the very code that
   // is verifying the app.
   if (!(await acquireLock(env, config.lockTtlMs))) return;
+  await runSelfUpdate(env, config, origin, state);
+}
+
+/** Minimum gap between checks the owner asks for (protects the GitHub quota). */
+export const SELF_CHECK_MIN_GAP_MS = 60_000;
+
+export type SelfCheckOutcome =
+  | "up_to_date"
+  | "updated"
+  | "rolled_back"
+  | "failed";
+
+export type SelfCheckResult =
+  | { ok: false; error: "self_update_disabled" | "too_soon" | "busy" }
+  | {
+      ok: true;
+      before: string;
+      channel: SelfChannel;
+      found: string | null;
+      outcome: SelfCheckOutcome;
+    };
+
+/**
+ * Check now, without waiting for the 6-hour window (POST /api/v1/self/check).
+ *
+ * For an urgent fix: it only brings the check forward. What gets installed is
+ * exactly what the tick would install — a strictly newer release on this
+ * guardian's channel — through the same three safeguards. A guardian whose
+ * owner switched self-update off (or that cannot name itself) does nothing.
+ */
+export async function selfCheckNow(
+  env: Env,
+  config: Config,
+  origin: string,
+): Promise<SelfCheckResult> {
+  if (!config.selfUpdateEnabled || !config.token || !config.accountId) {
+    return { ok: false, error: "self_update_disabled" };
+  }
+  const state = await getSelfState(env);
+  if (Date.now() - state.lastCheckAt < SELF_CHECK_MIN_GAP_MS) {
+    return { ok: false, error: "too_soon" };
+  }
+  if (!(await acquireLock(env, config.lockTtlMs))) {
+    return { ok: false, error: "busy" };
+  }
+  const found = await runSelfUpdate(env, config, origin, state);
+  const after = await getSelfState(env);
+  const outcome: SelfCheckOutcome = !found
+    ? "up_to_date"
+    : after.status === "updated"
+      ? "updated"
+      : after.status === "rolled_back"
+        ? "rolled_back"
+        : "failed";
+  return {
+    ok: true,
+    before: WORKEROPS_VERSION,
+    channel: state.channel,
+    found,
+    outcome,
+  };
+}
+
+/**
+ * The check and the replacement. The caller holds the lock; it is released
+ * here. Returns the newer tag that was attempted, or null when there was none.
+ */
+async function runSelfUpdate(
+  env: Env,
+  config: Config,
+  origin: string,
+  state: Awaited<ReturnType<typeof getSelfState>>,
+): Promise<string | null> {
+  let attempted: string | null = null;
   try {
     await setSelfState(env, { lastCheckAt: Date.now() });
 
     const tag = await resolveTag(config, state.channel);
-    if (!tag) return;
-    if (!isNewer(tag, WORKEROPS_VERSION)) return;
+    if (!tag) return null;
+    if (!isNewer(tag, WORKEROPS_VERSION)) return null;
+    attempted = tag;
 
     await setSelfState(env, {
       status: "updating",
@@ -260,7 +335,7 @@ export async function selfUpdateTick(
         updateCount: state.updateCount + 1,
         error: null,
       });
-      return;
+      return attempted;
     }
 
     await appendSelfEvent(env, "self_verify", "fail", verdict.detail);
@@ -275,7 +350,7 @@ export async function selfUpdateTick(
         status: "failed",
         error: `self-update unverified and no version to roll back to: ${verdict.detail}`,
       });
-      return;
+      return attempted;
     }
     await appendSelfEvent(env, "self_rollback", "run", fromVersionId);
     await new CfClient(config.token, config.accountId, config.opsWorkerName, {
@@ -294,4 +369,5 @@ export async function selfUpdateTick(
   } finally {
     await releaseLock(env);
   }
+  return attempted;
 }
