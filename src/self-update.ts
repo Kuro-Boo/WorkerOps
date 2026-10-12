@@ -147,6 +147,63 @@ async function verifyNewVersion(
   return { ok: false, detail: lastError };
 }
 
+const ORIGINS_KEY = "workerops:origins";
+const ORIGINS_CAP = 8;
+let knownOrigins: Set<string> | null = null;
+
+/**
+ * Remember the hosts this guardian is reached on (one KV read per isolate,
+ * a write only when a host is new). The self-update chooses among them.
+ */
+export async function rememberOrigin(env: Env, origin: string): Promise<void> {
+  if (knownOrigins?.has(origin)) return;
+  const stored = await readOrigins(env);
+  knownOrigins = new Set(stored);
+  if (knownOrigins.has(origin)) return;
+  const next = [origin, ...stored].slice(0, ORIGINS_CAP);
+  knownOrigins = new Set(next);
+  await env.WORKEROPS_STATE.put(ORIGINS_KEY, JSON.stringify(next));
+}
+
+async function readOrigins(env: Env): Promise<string[]> {
+  try {
+    const v = JSON.parse((await env.WORKEROPS_STATE.get(ORIGINS_KEY)) ?? "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** The first host on which the RUNNING version answers as itself, or null. */
+export async function pickVerifyOrigin(
+  env: Env,
+  config: Config,
+  origin: string,
+): Promise<string | null> {
+  const candidates = [...new Set([origin, ...(await readOrigins(env))])];
+  for (const c of candidates) {
+    try {
+      const res = await fetch(`${c}${config.opsPath}/api/v1/health`, {
+        headers: { "User-Agent": "WorkerOps/1.0", "cache-control": "no-cache" },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!res.ok) continue;
+      const body = (await res.json().catch(() => ({}))) as {
+        service?: string;
+        version?: string;
+      };
+      if (
+        body.service === "workerops" &&
+        stripV(body.version ?? "") === stripV(WORKEROPS_VERSION)
+      )
+        return c;
+    } catch {
+      /* try the next host */
+    }
+  }
+  return null;
+}
+
 /** Per-isolate gate so the KV throttle is read at most once per interval. */
 let nextLocalCheckAt = 0;
 
@@ -275,6 +332,27 @@ async function runSelfUpdate(
       `${WORKEROPS_VERSION} → ${tag} (${state.channel})`,
     );
 
+    // Pick the URL the new version will be verified through BEFORE deploying.
+    // Only a host that reaches this guardian from inside works: a Custom Domain
+    // or workers.dev does, a Route does not (a same-zone fetch to a Route goes
+    // to the origin — on 2026-10-12 that turned a good update into a 522 and a
+    // rollback). The current version must answer as itself there.
+    const verifyOrigin = await pickVerifyOrigin(env, config, origin);
+    if (!verifyOrigin) {
+      await appendSelfEvent(
+        env,
+        "self_verify_origin",
+        "fail",
+        "no known host reaches this guardian from inside",
+      );
+      await setSelfState(env, {
+        status: "failed",
+        error: "no host to verify the new version through (routes cannot be fetched from the same zone)",
+      });
+      return attempted;
+    }
+    await appendSelfEvent(env, "self_verify_origin", "ok", verifyOrigin);
+
     const client = new CfClient(
       config.token,
       config.accountId,
@@ -324,8 +402,8 @@ async function runSelfUpdate(
 
     // From here on the NEW code is serving. This isolate is still running the
     // OLD code, which is the only thing that can put the previous version back.
-    await appendSelfEvent(env, "self_verify", "run", `${origin}${config.opsPath}`);
-    const verdict = await verifyNewVersion(origin, config, tag);
+    await appendSelfEvent(env, "self_verify", "run", `${verifyOrigin}${config.opsPath}`);
+    const verdict = await verifyNewVersion(verifyOrigin, config, tag);
     if (verdict.ok) {
       await appendSelfEvent(env, "self_verify", "ok", verdict.detail);
       await setSelfState(env, {

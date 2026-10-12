@@ -2,7 +2,7 @@ import type { Env } from "./types";
 import { loadConfig } from "./config";
 import { handleOps, maintenancePage } from "./ops";
 import { watchdogTick } from "./orchestrator";
-import { selfUpdateTick } from "./self-update";
+import { rememberOrigin, selfUpdateTick } from "./self-update";
 import { autoUpdateTick } from "./release-ops";
 
 export default {
@@ -24,8 +24,12 @@ export default {
     // the public URL, and triggering from there could re-enter the update.
     // Cheap on the hot path — an in-isolate gate returns before touching KV
     // until the interval has elapsed.
+    const origin = new URL(request.url).origin;
     ctx.waitUntil(
-      selfUpdateTick(env, config, new URL(request.url).origin).catch(() => {}),
+      rememberOrigin(env, origin)
+        .catch(() => {})
+        .then(() => selfUpdateTick(env, config, origin))
+        .catch(() => {}),
     );
 
     // Everything else is forwarded to the app Worker via the service binding.
