@@ -1,4 +1,4 @@
-import { applyRelease, releaseInfo, setAuto, setChannel } from "./release-ops";
+import { applyRelease, releaseInfo, resolveConfig, setAuto, setChannel } from "./release-ops";
 import type { Env } from "./types";
 import type { Config } from "./config";
 import { getState, getSelfState, setSelfState } from "./state";
@@ -30,8 +30,10 @@ export async function handleOps(
   request: Request,
   env: Env,
   ctx: ExecutionContext,
-  config: Config,
+  loaded: Config,
 ): Promise<Response> {
+  // PRODUCT_ID from the settings, or the one the app declares in its health response.
+  const config = await resolveConfig(env, loaded);
   const url = new URL(request.url);
   let sub = url.pathname.slice(config.opsPath.length);
   if (sub === "") sub = "/";
@@ -181,14 +183,14 @@ export async function handleOps(
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       const body = (await request.json().catch(() => ({}))) as { enabled?: unknown };
       if (typeof body.enabled !== "boolean") throw new OpsError(400, "bad_request", "enabled must be true or false.");
-      return jsonResponse({ ok: true, ...(await setAuto(env, body.enabled)) });
+      return jsonResponse({ ok: true, ...(await setAuto(env, config, body.enabled)) });
     }
     // Which channel the app follows: stable, or dev (every published version). The token holder picks.
     if ((request.method === "PUT" || request.method === "POST") && sub === "/api/v1/release/channel") {
       requireToken(request, config);
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       const body = (await request.json().catch(() => ({}))) as { channel?: unknown };
-      return jsonResponse({ ok: true, ...(await setChannel(env, body.channel)) });
+      return jsonResponse({ ok: true, ...(await setChannel(env, config, body.channel)) });
     }
 
     // Operations — require WORKER_OPS_TOKEN. Both the page paths and /api/v1.
@@ -344,6 +346,7 @@ var STR={
   avail:'利用できる版',avail_new:'新しい版があります',avail_cur:'最新です',avail_unk:'確認できませんでした',
   relAuto:'自動で更新する(1日1回)',relChan:'受け取る版',relStable:'安定版(推奨)',relDev:'prerelease(確認前の版)',
   relDesc:'入のあいだ、選んだ版の新しいものを1日に1回確かめて入れます。入れた直後の検証に失敗すれば元の版に戻します。急ぐときは「Update」を押してください。',
+  relByApp:'この 2 つはアプリの管理画面で選びます（ここには選んだ値を出しています）。入のあいだ、選んだ版の新しいものを1日に1回確かめて入れ、検証に失敗すれば元の版に戻します。',
   relDevConfirm:'prerelease を受け取ります。確認前の版が自動で入るため、不具合に当たることがあります。続けますか？',
   relAutoOff:'自動更新を切にします。新しい版は「Update」を押したときだけ入ります。続けますか？',
   running:'稼働 version',ustate:'更新状態',active:'CF active version',lastgood:'last-good',fromto:'from → to',
@@ -391,6 +394,7 @@ var STR={
   avail:'offered version',avail_new:'a newer version is available',avail_cur:'up to date',avail_unk:'could not check',
   relAuto:'Update automatically (once a day)',relChan:'Versions to receive',relStable:'Stable (recommended)',relDev:'Prerelease (not yet vetted)',
   relDesc:'While on, the newest version of the chosen channel is checked once a day and installed. If it fails verification right after the deploy, the previous version is restored. Press Update when it cannot wait.',
+  relByApp:'These two are chosen in the admin screen of the app (shown here as chosen). While on, the newest version of the chosen channel is checked once a day and installed, and rolled back if it fails verification.',
   relDevConfirm:'Receive prereleases? Unvetted versions will be installed automatically and may contain defects. Continue?',
   relAutoOff:'Turn automatic updates off? New versions will be installed only when you press Update. Continue?',
   running:'running version',ustate:'update state',active:'CF active version',lastgood:'last-good',fromto:'from → to',
@@ -512,9 +516,10 @@ function releaseRow(r){if(!r)return '';
 function syncReleaseUi(r){
  var box=document.getElementById('relCtl');if(!box)return;
  box.hidden=!r;if(!r)return;
- setText('relAutoLabel',t('relAuto'));setText('relChanLabel',t('relChan'));setText('relDesc',t('relDesc'));
- document.getElementById('relAutoSw').setAttribute('aria-checked',r.auto?'true':'false');
- var sel=document.getElementById('relChan');
+ setText('relAutoLabel',t('relAuto'));setText('relChanLabel',t('relChan'));var byApp=r.managedBy==='app';
+ setText('relDesc',byApp?t('relByApp'):t('relDesc'));
+ var sw=document.getElementById('relAutoSw');sw.setAttribute('aria-checked',r.auto?'true':'false');sw.disabled=byApp;
+ var sel=document.getElementById('relChan');sel.disabled=byApp;
  sel.options[0].textContent=t('relStable');sel.options[1].textContent=t('relDev');
  if(document.activeElement!==sel)sel.value=r.channel==='dev'?'dev':'stable';}
 async function releasePut(path,body){setErr('');

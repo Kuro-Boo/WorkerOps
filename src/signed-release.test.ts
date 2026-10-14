@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { verifyArtifacts, verifyManifest } from "./signed-release.ts";
 import { channelPointer, fetchDistRelease } from "./dist-release.ts";
 import { loadConfig } from "./config.ts";
-import { autoUpdateTick, releaseInfo, setAuto, setChannel } from "./release-ops.ts";
+import { autoUpdateTick, releaseInfo, resolveConfig, setAuto, setChannel } from "./release-ops.ts";
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 const worker = Buffer.from("export default {fetch(){return new Response('ok')}}");
@@ -101,17 +101,35 @@ fetched.length = 0;
 await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
 assert.ok(fetched.includes("/v1/dist/mushmanager/channels/stable.json"));
 // The owner picks dev: the dev pointer is read from then on.
-await setChannel(ownerEnv as never, "dev");
+await setChannel(ownerEnv as never, ownerConfig, "dev");
 fetched.length = 0;
 info = await releaseInfo(ownerEnv as never, ownerConfig);
 assert.equal(info.channel, "dev");
 assert.ok(fetched.includes("/v1/dist/mushmanager/channels/dev.json"));
-await assert.rejects(() => setChannel(ownerEnv as never, "beta"), /stable" or "dev/);
+await assert.rejects(() => setChannel(ownerEnv as never, ownerConfig, "beta"), /stable" or "dev/);
 // Switched off by the owner: the tick does nothing, not even a lookup.
-await setAuto(ownerEnv as never, false);
+await setAuto(ownerEnv as never, ownerConfig, false);
 assert.equal((await releaseInfo(ownerEnv as never, ownerConfig)).auto, false);
 await (ownerEnv.WORKEROPS_STATE as never as ReturnType<typeof kv>).delete("workerops:release:last_auto_check");
 fetched.length = 0;
 await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
 assert.equal(fetched.length, 0);
 console.log("  ok   automatic updates on by default, owner picks the channel");
+
+// ── a guardian without PRODUCT_ID follows what the app declares ─────────────
+// (guardians installed before PRODUCT_ID existed: no settings are touched)
+const appSays = (body: Record<string, unknown>) => ({
+  async fetch(): Promise<Response> { return Response.json({ ok: true, version: "1.2.0", ...body }); },
+});
+const legacyEnv = { UPDATE: dist(), WORKEROPS_STATE: kv(), APP_SERVICE: appSays({ product_id: "mushmanager", update_policy: { auto: false, channel: "stable" } }) } as never;
+const legacy = await resolveConfig(legacyEnv, loadConfig(legacyEnv));
+assert.equal(legacy.productId, "mushmanager");
+info = await releaseInfo(legacyEnv, legacy);
+assert.equal(info.auto, false, "the app's choice wins");
+assert.equal(info.managedBy, "app");
+assert.equal(info.current, "1.2.0", "the running version comes from the app");
+assert.equal(info.newer, true);
+await assert.rejects(() => setAuto(legacyEnv, legacy, true), /admin screen/);
+// With no RELEASE_PUBKEYS, the bundled keys of the default endpoint are used: our test key is not among them.
+await assert.rejects(() => fetchDistRelease(legacyEnv, legacy, "1.2.3"), /not trusted/);
+console.log("  ok   product and update choices declared by the app");

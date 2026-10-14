@@ -48,6 +48,8 @@ WorkerOps は「常に生きている小さな番人」として app Worker の�
 |---|---|---|
 | 必須 | `GET {HEALTH_PATH}` | `200 {ok:true, version}` を返す。生死＋稼働 version の判定に使用。 |
 | 任意 | `POST {MIGRATE_PATH}` | 保留中の one-shot / migration を適用（DB を持つ app 側が実装。**追加専用・後方互換**）。 |
+| 任意 | health の `product_id` | 配布元での製品名。`PRODUCT_ID` が設定に無い guardian は、これで配布元から取る（設定を書き換えずに移れる）。公開鍵は `RELEASE_PUBKEYS` が無ければ guardian に同梱した既定の配布元の鍵を使う |
+| 任意 | health の `update_policy` | `{auto: boolean, channel: "stable"\|"dev"}`。持ち主の選択を app の管理画面が持つときに名乗る。名乗った項目は guardian の設定より優先し、復旧コンソールでは変えられない（app の画面で変える） |
 
 それ以外の挙動・データモデル・認証は app の自由です。
 

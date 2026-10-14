@@ -10,7 +10,7 @@
 import { filterBindings } from "./bindings";
 import { CfClient } from "./cf";
 import type { Config } from "./config";
-import { probeHealth } from "./health";
+import { probeHealth, runMigrate } from "./health";
 import {
   acquireLock,
   appendEvent,
@@ -25,6 +25,16 @@ import { errMsg, nowIso, sleep } from "./util";
 const WORKER_LIMIT = 10 * 1024 * 1024;
 const MIGRATIONS_LIMIT = 5 * 1024 * 1024;
 const VERSION_KEY = "workerops:release:version";
+/**
+ * Keys trusted when RELEASE_PUBKEYS is not set: the publisher keys of the default
+ * distribution endpoint (https://update.entamy.com). Guardians installed before
+ * PRODUCT_ID existed have no RELEASE_PUBKEYS, and the keys travel inside the
+ * guardian's own release so that nothing fetched at update time decides what is trusted.
+ * Rotation only ever adds a key, in a release signed with an older one.
+ */
+export const DEFAULT_RELEASE_PUBKEYS = JSON.stringify([
+  { key_id: "release-b01a61a2", pub: "oSIheWqY73pJf85mtBNC4N7pAM8_aSpnCzVNcZ4INps" },
+]);
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
 interface Artifact { name: string; role?: string; sha256: string; size: number }
@@ -115,7 +125,7 @@ export async function verifyManifest(env: Env, value: unknown, product: string):
     throw new Error("release identity is invalid");
   }
   if (!manifest.signature || manifest.signature.alg !== "ed25519") throw new Error("release signature is missing");
-  const trusted = keys(env.RELEASE_PUBKEYS).find((item) => item.key_id === manifest.signature.key_id);
+  const trusted = keys(env.RELEASE_PUBKEYS || (env.UPDATE_ORIGIN ? undefined : DEFAULT_RELEASE_PUBKEYS)).find((item) => item.key_id === manifest.signature.key_id);
   if (!trusted) throw new Error("release signing key is not trusted");
   const key = await crypto.subtle.importKey("raw", bytes(fromBase64Url(trusted.pub)), { name: "Ed25519" }, false, ["verify"]);
   const ok = await crypto.subtle.verify(
@@ -195,11 +205,17 @@ async function applyMigrations(env: Env, migrations: Array<{ name: string; sql: 
   }
 }
 
-export async function deploySignedRelease(env: Env, ctx: ExecutionContext, config: Config, release: SignedRelease): Promise<Response> {
+export async function deploySignedRelease(
+  env: Env, ctx: ExecutionContext, config: Config, release: SignedRelease, reinstall = false,
+): Promise<Response> {
   if (!config.token || !config.accountId || !config.appWorkerName) return response({ error: "cf_config_missing" }, 503);
-  const current = await env.WORKEROPS_STATE.get(VERSION_KEY);
+  // What the app reports wins over our record: the app may have updated itself
+  // (an app with its own update button) since we last deployed.
+  const live = (await probeHealth(env, config)).version;
+  const current = (live && VERSION_RE.test(live) ? live : null) ?? await env.WORKEROPS_STATE.get(VERSION_KEY);
   if (current && compareVersion(release.manifest.version, current) < 0) return response({ error: "release_downgrade" }, 409);
-  if (current === release.manifest.version) return response({ ok: true, status: "already_current", version: current });
+  // Rebuild puts the running version in again on purpose.
+  if (current === release.manifest.version && !reinstall) return response({ ok: true, status: "already_current", version: current });
   if (!await acquireLock(env, config.lockTtlMs)) return response({ error: "update_in_progress" }, 409);
 
   const client = new CfClient(config.token, config.accountId, config.appWorkerName, { max: config.retryMax, baseMs: config.retryBaseMs });
@@ -213,9 +229,14 @@ export async function deploySignedRelease(env: Env, ctx: ExecutionContext, confi
       toVersionId: null, prevAppVersion: previousHealthVersion, intendedRelease: release.manifest.version,
       startedAt: nowIso(), deployedAt: null, confirmedAt: null, finishedAt: null, error: null,
     });
-    await appendEvent(env, "migrate", "run", `${release.migrations.length} migrations`);
-    await applyMigrations(env, release.migrations);
-    await appendEvent(env, "migrate", "ok");
+    // An app with a MIGRATE_PATH keeps its own migration ledger: it is asked to
+    // migrate once the new version is live (as with the GitHub path). Only an app
+    // without one gets the release's migrations applied to APP_DB here.
+    if (!config.migratePath) {
+      await appendEvent(env, "migrate", "run", `${release.migrations.length} migrations`);
+      await applyMigrations(env, release.migrations);
+      await appendEvent(env, "migrate", "ok");
+    }
     const settings = await client.getSettings();
     const bindings = filterBindings(settings.bindings, config.bindingTypes);
     const versionId = await client.uploadVersion(release.worker, bindings, settings.compatibility_date, settings.compatibility_flags);
@@ -238,6 +259,11 @@ export async function deploySignedRelease(env: Env, ctx: ExecutionContext, confi
           await sleep(config.healthIntervalMs);
         }
         if (!healthy) throw new Error("new release did not become healthy");
+        if (config.migratePath) {
+          await appendEvent(env, "migrate", "run", config.migratePath);
+          if (!await runMigrate(env, config)) throw new Error("migrate failed");
+          await appendEvent(env, "migrate", "ok");
+        }
         await env.WORKEROPS_STATE.put(VERSION_KEY, release.manifest.version);
         await appendEvent(env, "confirm", "ok", versionId);
         await setState(env, { status: "confirmed", lastGoodVersionId: versionId, confirmedAt: nowIso(), finishedAt: nowIso(), error: null });
