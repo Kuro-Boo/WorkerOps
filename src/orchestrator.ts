@@ -516,6 +516,19 @@ export async function watchdogTick(env: Env, config: Config): Promise<void> {
 
   const h = await probeHealth(env, config);
   if (h.ok) {
+    // The verification that should have asked the app to migrate never finished
+    // (its isolate ended mid-window). Ask now, before confirming — confirming
+    // without it would leave the new version running on the old schema.
+    // The app's migrate endpoint is idempotent, so asking twice is harmless.
+    if (config.migratePath) {
+      await appendEvent(env, "migrate", "run", `watchdog: ${config.migratePath}`);
+      if (!(await runMigrate(env, config))) {
+        await appendEvent(env, "migrate", "fail", "watchdog");
+        await revertTo(env, config, "watchdog: migrate failed", true);
+        return;
+      }
+      await appendEvent(env, "migrate", "ok", "watchdog");
+    }
     await appendEvent(
       env,
       "watchdog",
