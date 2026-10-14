@@ -1,12 +1,12 @@
 /**
  * Pull a signed, version-pinned release from the distribution endpoint.
  *
- * ## Only when the owner asks
+ * ## Pulled, never pushed
  *
- * Whether to move to a new version is the owner's decision. This module only
- * looks up which version is offered and fetches a version the owner named.
- * Nothing can push a release into this guardian. Automatic updates run from
- * `scheduled` only when the owner has switched them on.
+ * This module only looks up which version is offered and fetches a version
+ * the guardian named. Nothing can push a release into this guardian.
+ * Automatic updates run from `scheduled` (on by default; the owner can switch
+ * them off), and the owner picks the channel (release-ops.ts).
  *
  * ## One endpoint for every product
  *
@@ -23,7 +23,7 @@
  * object at rest).
  */
 import type { Env } from "./types";
-import type { Config } from "./config";
+import type { Config, ReleaseChannel } from "./config";
 import { verifyManifest, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
@@ -48,9 +48,9 @@ async function get(env: Env, path: string): Promise<Response> {
   return env.UPDATE ? env.UPDATE.fetch(url) : fetch(url);
 }
 
-export async function channelPointer(env: Env, config: Config): Promise<Pointer | null> {
+export async function channelPointer(env: Env, config: Config, channel: ReleaseChannel = config.releaseChannel): Promise<Pointer | null> {
   if (!config.productId) throw new Error("PRODUCT_ID is not configured");
-  const r = await get(env, `/v1/dist/${config.productId}/channels/${config.releaseChannel}.json`);
+  const r = await get(env, `/v1/dist/${config.productId}/channels/${channel}.json`);
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`release channel lookup failed: HTTP ${r.status}`);
   const p = (await r.json()) as Pointer;

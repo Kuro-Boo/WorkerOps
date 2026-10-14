@@ -1,5 +1,7 @@
 import type { Env } from "./types";
 
+export type ReleaseChannel = "stable" | "dev";
+
 export interface Config {
   opsPath: string;
   healthPath: string;
@@ -10,8 +12,8 @@ export interface Config {
    * instead of RELEASE_SOURCE, and only when the owner asks for it.
    */
   productId: string;
-  /** Channel whose pointer is offered to the owner ("stable" unless set). */
-  releaseChannel: "stable" | "dev";
+  /** Channel offered until the owner picks one in the console ("stable" unless set). */
+  releaseChannel: ReleaseChannel;
   releaseSource: string;
   releaseTagPrefix: string;
   releaseAsset: string;

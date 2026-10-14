@@ -3,15 +3,21 @@
  *
  *   releaseInfo   which version is offered, and whether it is newer than the one running
  *   applyRelease  fetch a version the owner named, verify it, deploy it (verify → confirm or revert)
- *   setAuto       the owner turns automatic updates on/off (off by default)
- *   autoUpdateTick  once a day, apply the offered version — only when the owner turned it on
+ *   setAuto       the owner turns automatic updates on/off (on by default — 2026-10-14)
+ *   setChannel    the owner picks the channel: stable, or dev (every published version)
+ *   autoUpdateTick  once a day, apply the offered version — unless the owner turned it off
+ *
+ * Automatic updates are on by default so that a fix reaches owners who never
+ * open the console (2026-10-14, the operator's decision). Nothing is pushed in:
+ * this guardian pulls, verifies the signature, and reverts if the new version
+ * fails its health check. An owner who switched it off stays off.
  *
  * "Is there a newer version?" is never answered with "you are up to date" when
  * the lookup itself failed: `checkOk: false` is returned instead, so the console
  * can say it could not check.
  */
 import type { Env } from "./types";
-import type { Config } from "./config";
+import type { Config, ReleaseChannel } from "./config";
 import { channelPointer, fetchDistRelease, type Pointer } from "./dist-release";
 import { compareVersion, currentReleaseVersion, deploySignedRelease } from "./signed-release";
 import { probeHealth } from "./health";
@@ -19,6 +25,7 @@ import { errMsg, nowIso, OpsError } from "./util";
 
 const AUTO_KEY = "workerops:release:auto";
 const AUTO_BY_KEY = "workerops:release:auto_set";
+const CHANNEL_KEY = "workerops:release:channel";
 const LAST_AUTO_CHECK_KEY = "workerops:release:last_auto_check";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
@@ -43,11 +50,22 @@ async function runningVersion(env: Env, config: Config): Promise<string | null> 
   return health?.version && VERSION_RE.test(health.version) ? health.version : null;
 }
 
+const isChannel = (v: unknown): v is ReleaseChannel => v === "stable" || v === "dev";
+
+/** The owner's choice; the installer's RELEASE_CHANNEL until the owner picks one. */
+export async function releaseChannel(env: Env, config: Config): Promise<ReleaseChannel> {
+  const chosen = await env.WORKEROPS_STATE.get(CHANNEL_KEY);
+  return isChannel(chosen) ? chosen : config.releaseChannel;
+}
+
 export async function releaseInfo(env: Env, config: Config): Promise<ReleaseInfo> {
-  const [current, auto] = await Promise.all([runningVersion(env, config), env.WORKEROPS_STATE.get(AUTO_KEY)]);
-  const base = { productId: config.productId, channel: config.releaseChannel, current, auto: auto === "1", checkedAt: nowIso() };
+  const [current, auto, channel] = await Promise.all([
+    runningVersion(env, config), env.WORKEROPS_STATE.get(AUTO_KEY), releaseChannel(env, config),
+  ]);
+  // Unset means the owner never chose: on.
+  const base = { productId: config.productId, channel, current, auto: auto !== "0", checkedAt: nowIso() };
   try {
-    const offered = await channelPointer(env, config);
+    const offered = await channelPointer(env, config, channel);
     const newer = !!offered && (!current || compareVersion(offered.version, current) > 0);
     return { ...base, offered, newer, checkOk: true };
   } catch (error) {
@@ -62,7 +80,7 @@ export async function applyRelease(
   let target = version;
   if (!target) {
     if (reinstall) target = (await runningVersion(env, config)) ?? undefined;
-    else target = (await channelPointer(env, config))?.version;
+    else target = (await channelPointer(env, config, await releaseChannel(env, config)))?.version;
   }
   if (!target || !VERSION_RE.test(target)) {
     throw new OpsError(409, "no_release", "No release is offered for this product.");
@@ -79,10 +97,17 @@ export async function setAuto(env: Env, enabled: boolean): Promise<{ auto: boole
   return { auto: enabled };
 }
 
-/** Called from `scheduled`. Does nothing unless the owner switched automatic updates on. */
+export async function setChannel(env: Env, channel: unknown): Promise<{ channel: ReleaseChannel }> {
+  if (!isChannel(channel)) throw new OpsError(400, "bad_channel", 'channel must be "stable" or "dev".');
+  await env.WORKEROPS_STATE.put(CHANNEL_KEY, channel);
+  await env.WORKEROPS_STATE.put(`${CHANNEL_KEY}_set`, JSON.stringify({ channel, at: nowIso(), by: "owner" }));
+  return { channel };
+}
+
+/** Called from `scheduled`. Does nothing if the owner switched automatic updates off. */
 export async function autoUpdateTick(env: Env, ctx: ExecutionContext, config: Config): Promise<void> {
   if (!config.productId) return;
-  if ((await env.WORKEROPS_STATE.get(AUTO_KEY)) !== "1") return;
+  if ((await env.WORKEROPS_STATE.get(AUTO_KEY)) === "0") return;
   const last = Number((await env.WORKEROPS_STATE.get(LAST_AUTO_CHECK_KEY)) ?? "0");
   if (Date.now() - last < DAY_MS) return;
   // Record the attempt before any network call, so a failing lookup is not retried every tick.

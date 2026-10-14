@@ -3,6 +3,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { verifyArtifacts, verifyManifest } from "./signed-release.ts";
 import { channelPointer, fetchDistRelease } from "./dist-release.ts";
 import { loadConfig } from "./config.ts";
+import { autoUpdateTick, releaseInfo, setAuto, setChannel } from "./release-ops.ts";
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 const worker = Buffer.from("export default {fetch(){return new Response('ok')}}");
@@ -82,3 +83,35 @@ await assert.rejects(() => fetchDistRelease(yankEnv, loadConfig(yankEnv), "1.2.3
 // The older name RELEASE_PRODUCT is still read.
 assert.equal(loadConfig({ RELEASE_PRODUCT: "mushmanager" } as never).productId, "mushmanager");
 console.log("  ok   pull from distribution endpoint");
+
+// ── automatic updates and the owner's channel ───────────────────────────────
+const kv = () => {
+  const m = new Map<string, string>();
+  return { async get(k: string) { return m.get(k) ?? null; }, async put(k: string, v: string) { m.set(k, v); }, async delete(k: string) { m.delete(k); } };
+};
+const ownerEnv = { RELEASE_PUBKEYS: PUBKEYS, PRODUCT_ID: "mushmanager", UPDATE: dist(), WORKEROPS_STATE: kv() } as never as Record<string, never>;
+await (ownerEnv.WORKEROPS_STATE as never as ReturnType<typeof kv>).put("workerops:release:version", "1.2.3");
+const ownerConfig = loadConfig(ownerEnv as never);
+// Never chosen: automatic updates are on, and the installer's channel is used.
+let info = await releaseInfo(ownerEnv as never, ownerConfig);
+assert.equal(info.auto, true);
+assert.equal(info.channel, "stable");
+// The tick looks up the channel even though the owner never touched the switch.
+fetched.length = 0;
+await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
+assert.ok(fetched.includes("/v1/dist/mushmanager/channels/stable.json"));
+// The owner picks dev: the dev pointer is read from then on.
+await setChannel(ownerEnv as never, "dev");
+fetched.length = 0;
+info = await releaseInfo(ownerEnv as never, ownerConfig);
+assert.equal(info.channel, "dev");
+assert.ok(fetched.includes("/v1/dist/mushmanager/channels/dev.json"));
+await assert.rejects(() => setChannel(ownerEnv as never, "beta"), /stable" or "dev/);
+// Switched off by the owner: the tick does nothing, not even a lookup.
+await setAuto(ownerEnv as never, false);
+assert.equal((await releaseInfo(ownerEnv as never, ownerConfig)).auto, false);
+await (ownerEnv.WORKEROPS_STATE as never as ReturnType<typeof kv>).delete("workerops:release:last_auto_check");
+fetched.length = 0;
+await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
+assert.equal(fetched.length, 0);
+console.log("  ok   automatic updates on by default, owner picks the channel");

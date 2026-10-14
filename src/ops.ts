@@ -1,4 +1,4 @@
-import { applyRelease, releaseInfo, setAuto } from "./release-ops";
+import { applyRelease, releaseInfo, setAuto, setChannel } from "./release-ops";
 import type { Env } from "./types";
 import type { Config } from "./config";
 import { getState, getSelfState, setSelfState } from "./state";
@@ -175,13 +175,20 @@ export async function handleOps(
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       return jsonResponse(await releaseInfo(env, config));
     }
-    // Automatic updates are the owner's choice: off unless the token holder turns them on.
+    // Automatic updates: on unless the token holder turns them off.
     if ((request.method === "PUT" || request.method === "POST") && sub === "/api/v1/release/auto") {
       requireToken(request, config);
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       const body = (await request.json().catch(() => ({}))) as { enabled?: unknown };
       if (typeof body.enabled !== "boolean") throw new OpsError(400, "bad_request", "enabled must be true or false.");
       return jsonResponse({ ok: true, ...(await setAuto(env, body.enabled)) });
+    }
+    // Which channel the app follows: stable, or dev (every published version). The token holder picks.
+    if ((request.method === "PUT" || request.method === "POST") && sub === "/api/v1/release/channel") {
+      requireToken(request, config);
+      if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
+      const body = (await request.json().catch(() => ({}))) as { channel?: unknown };
+      return jsonResponse({ ok: true, ...(await setChannel(env, body.channel)) });
     }
 
     // Operations — require WORKER_OPS_TOKEN. Both the page paths and /api/v1.
@@ -262,6 +269,11 @@ button.op.b-update:hover{background:#22c55e}
 .chan .cl{font-size:13px;font-weight:700;color:#fdba74}
 .chan .cd{color:#94a3b8;font-size:11px;line-height:1.6;margin-top:6px}
 .chan .cd b{color:#fca5a5}
+.rel{margin:14px 0 0;padding:12px 14px;border:1px solid #334155;border-radius:8px;background:#0b1220}
+.rel .ct{display:flex;align-items:center;gap:10px;justify-content:space-between;margin:2px 0}
+.rel .cl{font-size:13px;font-weight:700}
+.rel .cd{color:#94a3b8;font-size:11px;line-height:1.6;margin:6px 0 0}
+#relAutoSw[aria-checked="true"]{background:#16a34a;border-color:#22c55e}
 .sw{position:relative;flex:0 0 auto;width:46px;height:26px;border-radius:13px;border:1px solid #475569;background:#1e293b;cursor:pointer;padding:0}
 .sw::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#94a3b8;transition:left .15s,background .15s}
 .sw[aria-checked="true"]{background:#ea580c;border-color:#f97316}
@@ -307,6 +319,12 @@ hr{border:0;border-top:1px solid #334155;margin:14px 0}
 <button class="op b-rebuild" onclick="act('reinstall')"><span class="ic"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="t"><b id="t_reinstall"></b><span class="d" id="d_reinstall"></span></span></button>
 <button class="op b-update" onclick="act('update')"><span class="ic"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg></span><span class="t"><b id="t_update"></b><span class="d" id="d_update"></span></span></button>
 </div>
+<div class="rel" id="relCtl" hidden>
+<div class="ct"><span class="cl" id="relAutoLabel"></span>
+<button class="sw" id="relAutoSw" role="switch" aria-checked="false" onclick="toggleAuto()" aria-label="auto"></button></div>
+<div class="ct"><span class="cl" id="relChanLabel"></span>
+<select id="relChan" class="langsel" onchange="pickChannel(this)"><option value="stable"></option><option value="dev"></option></select></div>
+<p class="cd" id="relDesc"></p></div>
 <div class="chan">
 <div class="ct"><span class="cl" id="chanLabel"></span>
 <button class="sw" id="chanSw" role="switch" aria-checked="false" onclick="toggleChannel()" aria-label="develop"></button></div>
@@ -323,7 +341,11 @@ hr{border:0;border-top:1px solid #334155;margin:14px 0}
 var OPS=${ops};
 var STR={
  ja:{sub:'管理 Worker のステータス（自動表示）— 操作にはトークンが必要',loading:'読み込み中…',up:'稼働中',down:'応答なし',
-  avail:'利用できる版',avail_new:'新しい版があります',avail_cur:'最新です',avail_unk:'確認できませんでした',avail_auto:'自動更新',on:'入',off:'切',
+  avail:'利用できる版',avail_new:'新しい版があります',avail_cur:'最新です',avail_unk:'確認できませんでした',
+  relAuto:'自動で更新する(1日1回)',relChan:'受け取る版',relStable:'安定版(推奨)',relDev:'prerelease(確認前の版)',
+  relDesc:'入のあいだ、選んだ版の新しいものを1日に1回確かめて入れます。入れた直後の検証に失敗すれば元の版に戻します。急ぐときは「Update」を押してください。',
+  relDevConfirm:'prerelease を受け取ります。確認前の版が自動で入るため、不具合に当たることがあります。続けますか？',
+  relAutoOff:'自動更新を切にします。新しい版は「Update」を押したときだけ入ります。続けますか？',
   running:'稼働 version',ustate:'更新状態',active:'CF active version',lastgood:'last-good',fromto:'from → to',
   prev:'prev app version',intended:'intended release',times:'開始 / 確定 / 終了',worker:'app worker',
   release:'release source',hm:'health / migrate',hwin:'health 窓 / 間隔',
@@ -340,7 +362,7 @@ var STR={
   optarget:'管理対象の App Worker に対して操作します。（Worker作成時に発行された WORKER_OPS_TOKEN が必要です）',ph:'WORKER_OPS_TOKEN（操作に必要）',
   t_revert:'Revert',d_revert:'現在の App Worker を直前の安定版に戻します',
   t_reinstall:'Rebuild',d_reinstall:'Worker を作り直して再インストールします',
-  t_update:'Update',d_update:'配布元から版を取得して更新します（押したときだけ）',
+  t_update:'Update',d_update:'配布元から今すぐ版を取得して更新します',
   safe:'<b>この 3 つの操作が入れ替えるのは Worker（プログラム本体）だけです。</b>接続されている D1（データベース）・KV・R2（画像などのファイル）には一切書き込みません。記事・設定・アップロード済みのファイルはそのまま残り、バインディングも現在の設定を引き継ぎます。',
   selfVer:'WorkerOps の版',selfChan:'更新チャンネル',selfCount:'自己更新の実行回数',
   selfVerHint:'この復旧コンソール自身の版。新しい安定版が出ると{iv}時間ごとに自動で入れ替わります（利用者の操作は不要）。',
@@ -366,7 +388,11 @@ var STR={
   st_verify:'health による検証',st_migrate:'マイグレーションを実行',st_confirm:'確定（last-good を更新）',
   st_revert:'巻き戻し',st_auto_revert:'自動巻き戻し',st_watchdog:'watchdog による点検',st_aborted:'中止'},
  en:{sub:'Managed Worker status (auto) — operations require a token',loading:'Loading…',up:'up',down:'down',
-  avail:'offered version',avail_new:'a newer version is available',avail_cur:'up to date',avail_unk:'could not check',avail_auto:'automatic updates',on:'on',off:'off',
+  avail:'offered version',avail_new:'a newer version is available',avail_cur:'up to date',avail_unk:'could not check',
+  relAuto:'Update automatically (once a day)',relChan:'Versions to receive',relStable:'Stable (recommended)',relDev:'Prerelease (not yet vetted)',
+  relDesc:'While on, the newest version of the chosen channel is checked once a day and installed. If it fails verification right after the deploy, the previous version is restored. Press Update when it cannot wait.',
+  relDevConfirm:'Receive prereleases? Unvetted versions will be installed automatically and may contain defects. Continue?',
+  relAutoOff:'Turn automatic updates off? New versions will be installed only when you press Update. Continue?',
   running:'running version',ustate:'update state',active:'CF active version',lastgood:'last-good',fromto:'from → to',
   prev:'prev app version',intended:'intended release',times:'started / confirmed / finished',worker:'app worker',
   release:'release source',hm:'health / migrate',hwin:'health window / interval',
@@ -383,7 +409,7 @@ var STR={
   optarget:'Operations target the managed App Worker. (the WORKER_OPS_TOKEN issued when the Worker was created is required)',ph:'WORKER_OPS_TOKEN (required for operations)',
   t_revert:'Revert',d_revert:'Roll the App Worker back to the last stable version',
   t_reinstall:'Rebuild',d_reinstall:'Recreate and reinstall the Worker',
-  t_update:'Update',d_update:'Fetch and deploy a release from the distribution source (only when you press it)',
+  t_update:'Update',d_update:'Fetch and deploy a release from the distribution source now',
   safe:'<b>These three operations replace the Worker (the program) and nothing else.</b> They never write to the D1 database, KV, or R2 bucket bound to it. Articles, settings and uploaded files stay exactly as they are, and the current bindings are carried over.',
   selfVer:'WorkerOps version',selfChan:'update channel',selfCount:'self-updates',
   selfVerHint:'The version of this recovery console itself. It replaces itself automatically when a new stable release appears (checked every {iv}h, no user action).',
@@ -482,7 +508,27 @@ function incidentsRow(inc){
 function releaseRow(r){if(!r)return '';
  var o=r.offered,state=!r.checkOk?t('avail_unk'):(r.newer?t('avail_new'):t('avail_cur'));
  var sev=o&&o.severity&&o.severity!=='normal'?(' ['+esc(o.severity)+']'):'';
- return row(t('avail'),(o?esc(o.version)+sev+' — ':'')+esc(state)+' ('+esc(r.channel)+')')+row(t('avail_auto'),r.auto?t('on'):t('off'));}
+ return row(t('avail'),(o?esc(o.version)+sev+' — ':'')+esc(state)+' ('+esc(r.channel)+')');}
+function syncReleaseUi(r){
+ var box=document.getElementById('relCtl');if(!box)return;
+ box.hidden=!r;if(!r)return;
+ setText('relAutoLabel',t('relAuto'));setText('relChanLabel',t('relChan'));setText('relDesc',t('relDesc'));
+ document.getElementById('relAutoSw').setAttribute('aria-checked',r.auto?'true':'false');
+ var sel=document.getElementById('relChan');
+ sel.options[0].textContent=t('relStable');sel.options[1].textContent=t('relDev');
+ if(document.activeElement!==sel)sel.value=r.channel==='dev'?'dev':'stable';}
+async function releasePut(path,body){setErr('');
+ if(!tok()){setErr(t('needtok'));syncReleaseUi(lastData&&lastData.release);return;}
+ try{var r=await fetch(OPS+'/api/v1/release/'+path,{method:'PUT',
+  headers:{'authorization':'Bearer '+tok(),'content-type':'application/json'},body:JSON.stringify(body)});
+ var d=await r.json();if(!r.ok)setErr(d.message||d.error||('HTTP '+r.status));
+ loadStatus();}catch(e){setErr(String(e));}}
+function toggleAuto(){var cur=!!(lastData&&lastData.release&&lastData.release.auto);
+ if(cur&&!confirm(t('relAutoOff')))return;
+ releasePut('auto',{enabled:!cur});}
+function pickChannel(sel){var next=sel.value;
+ if(next==='dev'&&!confirm(t('relDevConfirm'))){sel.blur();syncReleaseUi(lastData&&lastData.release);return;}
+ sel.blur();releasePut('channel',{channel:next});}
 function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=d.tunables||{},cf=d.cf||{};
  var color=h.ok?'#22c55e':'#ef4444';
  document.getElementById('status').innerHTML=
@@ -507,6 +553,7 @@ function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=
  rowH(t('retryRev'),esc(tn.revertRetryMax)+' '+t('unit'),fill(t('retryRevHint'),{n:esc(tn.revertRetryMax)}));
  var ot=document.getElementById('opTarget');if(ot)ot.textContent=t('optarget');
  syncChannelUi(d.self||{});
+ syncReleaseUi(d.release);
  if(tracking)renderSteps(d);}
 function stepIcon(st){return st==='ok'?'✓':(st==='fail'?'✕':'●');}
 function renderSteps(d){

@@ -58,7 +58,7 @@ WorkerOps は「常に生きている小さな番人」として app Worker の�
 | `APP_SERVICE` | Service Binding | app への転送・ヘルス検証・migrate 先 |
 | `CF_API_TOKEN` | Secret | CF API で app を更新・revert（`Workers Scripts:Edit`） |
 | `CF_ACCOUNT_ID` / `APP_WORKER_NAME` | env | 更新/revert 対象の特定 |
-| `PRODUCT_ID` | env | 配布元（`UPDATE_ORIGIN`、既定 `https://update.entamy.com`）での製品名。設定すると、更新は `/v1/dist/{PRODUCT_ID}/…` から署名済み・版固定で取り、**持ち主が「更新」を押したとき（または自動更新を入にしたとき）だけ**適用する。取れる版は `GET {OPS_PATH}/api/v1/release`、自動更新の切り替えは `PUT {OPS_PATH}/api/v1/release/auto`（トークン必須・既定は切） |
+| `PRODUCT_ID` | env | 配布元（`UPDATE_ORIGIN`、既定 `https://update.entamy.com`）での製品名。設定すると、更新は `/v1/dist/{PRODUCT_ID}/…` から署名済み・版固定で取る。**自動更新は既定で入**（1日1回・入れた直後の検証に失敗すれば元に戻す）で、持ち主は切にできる。「更新」を押せば今すぐ入る。取れる版は `GET {OPS_PATH}/api/v1/release`、自動更新の切り替えは `PUT {OPS_PATH}/api/v1/release/auto`、受け取るチャンネル（`stable` / `dev`）は `PUT {OPS_PATH}/api/v1/release/channel`（どちらもトークン必須）。外から版を送り込む口は無い |
 | `RELEASE_SOURCE` | env | `PRODUCT_ID` が無いときだけ使う、`worker.js` の取得元（例: GitHub `owner/repo`） |
 | `OPS_PATH` | env | 予約パス接頭辞（既定 `/__workerops__`） |
 | `HEALTH_PATH` / `MIGRATE_PATH` | env | app のヘルス／マイグレーション実行パス |
