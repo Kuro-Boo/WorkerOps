@@ -3,6 +3,7 @@ import type { Env } from "./types";
 import type { Config } from "./config";
 import { getState, getSelfState, setSelfState } from "./state";
 import { deployLatest, runRevert, watchdogTick } from "./orchestrator";
+import { assetsRecord } from "./assets";
 import { probeHealth } from "./health";
 import { fetchAppIncidents } from "./incidents";
 import { WORKEROPS_VERSION } from "./version";
@@ -42,7 +43,7 @@ export async function handleOps(
     // Status payload (public). Shared by the recovery page and the REST API.
     const status = async (): Promise<Response> => {
       ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
-      const [state, self, activeVersionId, health, incidents, release] = await Promise.all([
+      const [state, self, activeVersionId, health, incidents, release, assets] = await Promise.all([
         getState(env),
         getSelfState(env),
         new CfClient(config.token, config.accountId, config.appWorkerName, {
@@ -54,6 +55,7 @@ export async function handleOps(
         probeHealth(env, config).catch(() => ({ ok: false, status: 0 })),
         fetchAppIncidents(config),
         config.productId ? releaseInfo(env, config).catch(() => null) : Promise.resolve(null),
+        assetsRecord(env).catch(() => null),
       ]);
       return jsonResponse({
         app: {
@@ -73,6 +75,7 @@ export async function handleOps(
           lockTtlMs: config.lockTtlMs,
         },
         state,
+        assets,
         self: {
           ...self,
           version: WORKEROPS_VERSION,

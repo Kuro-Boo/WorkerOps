@@ -15,6 +15,7 @@ import { probeHealth, runMigrate } from "./health";
 import { pickRelease } from "./release-tag";
 import { fetchRetry } from "./retry";
 import { nowIso, errMsg, sleep, OpsError } from "./util";
+import { keepGoodCode, restoreVersion } from "./assets";
 
 export interface DeployResult {
   ok: boolean;
@@ -345,7 +346,7 @@ async function verifyAndFinalize(
       }
       await appendEvent(env, "migrate", "ok");
     }
-    await confirm(env, opts.toVersionId);
+    await confirm(env, config, opts.toVersionId);
   };
 
   try {
@@ -402,7 +403,7 @@ async function verifyAndFinalize(
   }
 }
 
-async function confirm(env: Env, toVersionId: string): Promise<void> {
+async function confirm(env: Env, config: Config, toVersionId: string): Promise<void> {
   await appendEvent(env, "confirm", "ok", toVersionId);
   await setState(env, {
     status: "confirmed",
@@ -411,6 +412,8 @@ async function confirm(env: Env, toVersionId: string): Promise<void> {
     lastGoodVersionId: toVersionId,
     error: null,
   });
+  // A revert of an app with assets rebuilds from this code (assets.ts).
+  await keepGoodCode(env, config, toVersionId);
 }
 
 /**
@@ -458,15 +461,26 @@ async function revertTo(
     return;
   }
   try {
-    await cf(config, config.revertRetryMax).deployVersion(
+    // With assets, a new version from the last-good code that keeps today's
+    // pages; otherwise the old version id, as before (assets.ts).
+    const restored = await restoreVersion(
+      env,
+      cf(config, config.revertRetryMax),
       target,
       `WorkerOps revert (${reason})`,
+      config.bindingTypes,
     );
-    await appendEvent(env, auto ? "auto_revert" : "revert", "ok", target);
+    await appendEvent(
+      env,
+      auto ? "auto_revert" : "revert",
+      "ok",
+      restored.how === "code" ? `${restored.versionId} (last-good code, current assets)` : target,
+    );
     await setState(env, {
       status: "reverted",
       finishedAt: nowIso(),
       error: reason,
+      ...(restored.how === "code" ? { lastGoodVersionId: restored.versionId } : {}),
       ...counters,
     });
   } catch (e) {
@@ -542,6 +556,7 @@ export async function watchdogTick(env: Env, config: Config): Promise<void> {
       lastGoodVersionId: st.toVersionId ?? st.lastGoodVersionId,
       error: null,
     });
+    await keepGoodCode(env, config, st.toVersionId ?? st.lastGoodVersionId);
   } else {
     await appendEvent(
       env,

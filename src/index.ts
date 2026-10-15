@@ -1,9 +1,31 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./types";
 import { loadConfig } from "./config";
 import { handleOps, maintenancePage } from "./ops";
 import { watchdogTick } from "./orchestrator";
 import { rememberOrigin, selfUpdateTick } from "./self-update";
 import { autoUpdateTick } from "./release-ops";
+import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
+
+/**
+ * The app hands its built pages to the guardian here (assets.ts). Reached only
+ * through a service binding that names this entrypoint — it has no URL — so a
+ * caller needs no token: only a Worker bound to it on this account can call.
+ *
+ *   env.WORKEROPS.publish(manifest, read)
+ *     manifest  { "/post/index.html": { hash, size, type } }   — {} takes every asset down
+ *     read      (hashes) => [{ hash, base64 }]   — a function: RPC hands us a stub
+ *               to call back while this call runs
+ */
+export class WorkerOpsAssets extends WorkerEntrypoint<Env> {
+  async publish(
+    manifest: Record<string, AssetFile>,
+    read: AssetSource["read"],
+    options?: { config?: Record<string, unknown> },
+  ): Promise<PublishResult> {
+    return publishAssets(this.env, loadConfig(this.env), manifest, { read: (h) => read(h) }, options ?? {});
+  }
+}
 
 export default {
   /** Front-of-app proxy + Ops endpoints. */

@@ -9,6 +9,7 @@
  */
 import { filterBindings } from "./bindings";
 import { CfClient } from "./cf";
+import { keepGoodCode, restoreVersion } from "./assets";
 import type { Config } from "./config";
 import { probeHealth, runMigrate } from "./health";
 import {
@@ -267,8 +268,9 @@ export async function deploySignedRelease(
         await env.WORKEROPS_STATE.put(VERSION_KEY, release.manifest.version);
         await appendEvent(env, "confirm", "ok", versionId);
         await setState(env, { status: "confirmed", lastGoodVersionId: versionId, confirmedAt: nowIso(), finishedAt: nowIso(), error: null });
+        await keepGoodCode(env, config, versionId);
       } catch (error) {
-        if (fromVersion) await client.deployVersion(fromVersion, `WorkerOps auto-revert ${release.manifest.version}`);
+        if (fromVersion) await restoreVersion(env, client, fromVersion, `WorkerOps auto-revert ${release.manifest.version}`, config.bindingTypes);
         await appendEvent(env, "verify", "fail", errMsg(error));
         await setState(env, { status: fromVersion ? "reverted" : "manual_required", finishedAt: nowIso(), error: errMsg(error) });
       } finally {
