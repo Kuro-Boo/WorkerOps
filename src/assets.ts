@@ -76,7 +76,7 @@ export interface AssetsRecord {
 
 export type PublishResult =
   | { ok: true; status: "published"; versionId: string; files: number; uploaded: number }
-  | { ok: false; status: "busy" | "invalid" | "failed"; error: string };
+  | { ok: false; status: "busy" | "invalid" | "failed" | "partial"; error: string };
 
 function client(config: Config): CfClient {
   return new CfClient(config.token, config.accountId, config.appWorkerName, {
@@ -215,19 +215,32 @@ export async function publishAssets(
     const empty = files === 0;
     const session = empty ? { jwt: "", buckets: [] as string[][] } : await cf.assetsUploadSession(bare);
     let completion = session.jwt;
+    // Upload whatever the app returns, even part of a bucket. Cloudflare keeps
+    // what was uploaded and the next session asks only for the rest (tried on
+    // a test Worker 2026-10-16, including part of one bucket). A bucket mixes
+    // files of many pages, and the app reads only so many pages per call — so
+    // "all of a bucket or nothing" never moved forward on a large site
+    // (kuro.boo: every pass failed at the first bucket). Each call now makes
+    // progress, and the app's next build pass carries on until none is left.
+    let missing = 0;
     for (const bucket of session.buckets) {
       const byHash = new Map<string, string>();
       for (let i = 0; i < bucket.length; i += READ_CHUNK) {
         for (const g of await source.read(bucket.slice(i, i + READ_CHUNK))) byHash.set(g.hash, g.base64);
       }
-      const missing = bucket.filter((h) => !byHash.has(h));
-      if (missing.length) throw new Error(`app did not return ${missing.length} file(s)`);
+      const have = bucket.filter((h) => byHash.has(h));
+      missing += bucket.length - have.length;
+      if (!have.length) continue;
       const done = await cf.uploadAssetBucket(
         session.jwt,
-        bucket.map((h) => ({ hash: h, base64: byHash.get(h)!, type: types.get(h) ?? "" })),
+        have.map((h) => ({ hash: h, base64: byHash.get(h)!, type: types.get(h) ?? "" })),
       );
-      uploaded += bucket.length;
+      uploaded += have.length;
       if (done) completion = done;
+    }
+    if (missing) {
+      // Not complete: no version yet. Say how far it got; the app asks again.
+      return { ok: false, status: "partial", error: `uploaded ${uploaded}, ${missing} file(s) still to send` };
     }
 
     // The code serving now is the confirmed code (no update holds the lock).

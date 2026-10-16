@@ -121,8 +121,14 @@ const source = (drop: string[] = []) => ({
   const env = fakeEnv();
   const { cf, calls } = fakeCf({ buckets: [[h("b")]] });
   const r = await publishAssets(env, config, manifest, source([h("b")]), {}, cf);
-  eq("app が返さなければ失敗", [r.ok, r.status], [false, "failed"]);
-  eq("失敗したら版を出さない", calls.some((c) => c[0] === "deploy"), false);
+  eq("app が返さなければ途中まで(partial)", [r.ok, r.status], [false, "partial"]);
+  eq("途中なら版を出さない", calls.some((c) => c[0] === "deploy"), false);
+}
+{
+  const env = fakeEnv();
+  const { cf, calls } = fakeCf({ buckets: [[h("b"), h("c")]] });
+  const r = await publishAssets(env, config, manifest, source([h("c")]), {}, cf);
+  eq("束の一部しか返らなくても、返った分は上げる(次の回は残りだけ)", [r.status, calls.filter((c) => c[0] === "bucket").map((c) => c[1])], ["partial", [["upload-jwt", ["bb:text/html"]]]]);
   eq("一度も出していなければ「出した」にしない", await hasPublishedAssets(env), false);
   eq("失敗でも鍵は返す", env.store.has("workerops:lock"), false);
 }
