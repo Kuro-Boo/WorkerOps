@@ -76,7 +76,9 @@ export interface AssetsRecord {
 
 export type PublishResult =
   | { ok: true; status: "published"; versionId: string; files: number; uploaded: number }
-  | { ok: false; status: "busy" | "invalid" | "failed" | "partial"; error: string };
+  | { ok: false; status: "busy" | "invalid" | "failed"; error: string }
+  /** Some files went up; `remaining` are still to send (the app asks again). */
+  | { ok: false; status: "partial"; error: string; uploaded: number; remaining: number };
 
 function client(config: Config): CfClient {
   return new CfClient(config.token, config.accountId, config.appWorkerName, {
@@ -240,7 +242,7 @@ export async function publishAssets(
     }
     if (missing) {
       // Not complete: no version yet. Say how far it got; the app asks again.
-      return { ok: false, status: "partial", error: `uploaded ${uploaded}, ${missing} file(s) still to send` };
+      return { ok: false, status: "partial", error: `uploaded ${uploaded}, ${missing} file(s) still to send`, uploaded, remaining: missing };
     }
 
     // The code serving now is the confirmed code (no update holds the lock).
