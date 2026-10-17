@@ -1,5 +1,5 @@
 // 契約テスト(`npm run test:defects`)。失敗したときだけ、符号だけを、1回だけ送る。
-import { appFailureCode, lastFailedStep, getState, setSelfState } from "./state";
+import { appFailureCode, appRecordCode, lastFailedStep, getState, setState, setSelfState } from "./state";
 import { installId, reportDefect } from "./defects";
 import type { Env } from "./types";
 
@@ -42,7 +42,10 @@ eq("手当てが要る", appFailureCode(idle, { status: "manual_required" }), "w
 eq("自動の巻き戻し", appFailureCode(idle, { status: "reverted", autoRevertCount: 1 }), "workerops_app_auto_reverted");
 eq("人が押した Revert は送らない", appFailureCode(idle, { status: "reverted" }), null);
 eq("同じ状態の書き直しは送らない", appFailureCode({ ...idle, status: "manual_required" }, { status: "manual_required" }), null);
-eq("成功は送らない", appFailureCode(idle, { status: "confirmed" }), null);
+eq("成功は不具合としては送らない", appFailureCode(idle, { status: "confirmed" }), null);
+eq("確かめが済んだ更新は記録として送る", appRecordCode({ ...idle, status: "deployed_unverified" }, { status: "confirmed" }), "workerops_app_updated");
+eq("confirmed の書き直しは送らない", appRecordCode({ ...idle, status: "confirmed" }, { status: "confirmed" }), null);
+eq("戻しは記録にしない", appRecordCode(idle, { status: "reverted" }), null);
 eq(
   "失敗した段の符号",
   lastFailedStep([
@@ -69,6 +72,17 @@ await setSelfState(e2, { status: "updating" });
 await setSelfState(e2, { status: "rolled_back" });
 await setSelfState(e2, { status: "rolled_back" });
 eq("自己更新の巻き戻しは1回だけ送る", sent.map((x) => x.code), ["workerops_self_rolled_back"]);
+
+eq("不具合は record を付けない", sent[0]?.record, false);
+
+sent.length = 0;
+const e3 = fakeEnv();
+await setState(e3, { status: "deployed_unverified", operation: "update", intendedRelease: "v1.10.51", prevAppVersion: "1.10.50" });
+await setState(e3, { status: "confirmed" });
+await setState(e3, { status: "confirmed" });
+eq("確かめが済んだ更新を1回だけ送る", sent.map((x) => x.code), ["workerops_app_updated"]);
+eq("記録として送る", sent[0]?.record, true);
+eq("どの版からどの版へ", sent[0]?.detail, { app: "cms", operation: "update", release: "v1.10.51", from: "1.10.50" });
 
 if (failed) {
   console.error(`${failed} 件失敗`);

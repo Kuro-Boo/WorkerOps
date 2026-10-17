@@ -3,7 +3,9 @@
  *
  * A guardian's failures are otherwise only visible by opening its /status one
  * install at a time. So when an update or a self-update FAILS, one event is
- * sent. Successes and "nothing newer" are not sent.
+ * sent. "Nothing newer" is not sent. One success is: the app updated and
+ * confirmed (`workerops_app_updated`), sent as a record — not a defect — so
+ * an update the guardian made leaves a trace next to the app's own reports.
  *
  * Only codes and numbers leave the guardian: no error text, no URL, no host
  * name, no account id (the install id is a hash). `DEFECTS=off` stops it.
@@ -20,7 +22,12 @@ export type DefectCode =
   | "workerops_self_failed"
   | "workerops_app_failed_predeploy"
   | "workerops_app_auto_reverted"
-  | "workerops_app_manual_required";
+  | "workerops_app_manual_required"
+  /** A record, not a defect: the app was updated and confirmed. */
+  | "workerops_app_updated";
+
+/** Codes that mark something that went right (Defects' `record`), not a fault. */
+const RECORD_CODES: ReadonlySet<DefectCode> = new Set(["workerops_app_updated"]);
 
 export function defectsEnabled(env: Env): boolean {
   return !["off", "0", "false", "no"].includes(
@@ -75,6 +82,7 @@ export async function reportDefect(
         app_version: WORKEROPS_VERSION,
         detail: clean,
         debug_level: 1,
+        record: RECORD_CODES.has(code),
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });

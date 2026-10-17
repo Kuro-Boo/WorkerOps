@@ -103,9 +103,16 @@ export async function setState(
     updatedAt: nowIso(),
   };
   await env.WORKEROPS_STATE.put(STATE_KEY, JSON.stringify(next));
-  // Failures go to Entamy Defects, once per transition (defects.ts).
-  const code = appFailureCode(prev, patch);
-  if (code) {
+  // Failures go to Entamy Defects, once per transition (defects.ts), and so
+  // does a confirmed update — as a record, not a defect.
+  const code = appFailureCode(prev, patch) ?? appRecordCode(prev, patch);
+  if (code === "workerops_app_updated") {
+    await reportDefect(env, code, {
+      operation: next.operation,
+      release: next.intendedRelease,
+      from: next.prevAppVersion,
+    });
+  } else if (code) {
     await reportDefect(env, code, {
       operation: next.operation,
       step: lastFailedStep(next.events),
@@ -131,6 +138,20 @@ export function appFailureCode(
   if (patch.status === "reverted" && patch.autoRevertCount !== undefined)
     return "workerops_app_auto_reverted";
   return null;
+}
+
+/**
+ * A confirmed update (also one the watchdog confirms later). Only update and
+ * reinstall end in "confirmed" — a revert ends in "reverted" — so the
+ * transition alone says the app now runs a new, verified version.
+ */
+export function appRecordCode(
+  prev: UpdateState,
+  patch: Partial<UpdateState>,
+): "workerops_app_updated" | null {
+  return patch.status === "confirmed" && prev.status !== "confirmed"
+    ? "workerops_app_updated"
+    : null;
 }
 
 /** The step key of the last failed step in the journal (a token, not text). */
