@@ -60,7 +60,7 @@ export interface UpdateState {
 }
 
 const STATE_KEY = "workerops:state";
-const LOCK_KEY = "workerops:lock";
+export const LOCK_KEY = "workerops:lock";
 
 const DEFAULT_STATE: UpdateState = {
   status: "idle",
@@ -168,6 +168,19 @@ export async function appendEvent(
 
 interface Lock {
   at: number;
+  /**
+   * How long THIS lock is meant to last. A holder that needs longer than the
+   * guardian's own operations (an app replacing the guardian: peer.ts) says
+   * so here — otherwise the guardian, judging by its own shorter TTL, would
+   * take the lock over midway and update the app under the app's feet.
+   */
+  ttl?: number;
+}
+
+/** A lock still stands while younger than its own TTL (or the caller's, if it named none). */
+function lockLive(lock: Lock, lockTtlMs: number): boolean {
+  const ttl = typeof lock.ttl === "number" && lock.ttl > 0 ? lock.ttl : lockTtlMs;
+  return Date.now() - lock.at < ttl;
 }
 
 /**
@@ -182,12 +195,12 @@ export async function acquireLock(
   if (raw) {
     try {
       const lock = JSON.parse(raw) as Lock;
-      if (Date.now() - lock.at < lockTtlMs) return false;
+      if (lockLive(lock, lockTtlMs)) return false;
     } catch {
       /* corrupt lock — overwrite */
     }
   }
-  await env.WORKEROPS_STATE.put(LOCK_KEY, JSON.stringify({ at: Date.now() }), {
+  await env.WORKEROPS_STATE.put(LOCK_KEY, JSON.stringify({ at: Date.now(), ttl: lockTtlMs } satisfies Lock), {
     expirationTtl: Math.max(60, Math.ceil(lockTtlMs / 1000)),
   });
   return true;
@@ -205,8 +218,7 @@ export async function clearStaleLock(
   if (!raw) return;
   try {
     const lock = JSON.parse(raw) as Lock;
-    if (Date.now() - lock.at >= lockTtlMs)
-      await env.WORKEROPS_STATE.delete(LOCK_KEY);
+    if (!lockLive(lock, lockTtlMs)) await env.WORKEROPS_STATE.delete(LOCK_KEY);
   } catch {
     await env.WORKEROPS_STATE.delete(LOCK_KEY);
   }

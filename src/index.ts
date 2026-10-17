@@ -6,6 +6,7 @@ import { watchdogTick } from "./orchestrator";
 import { rememberOrigin, selfUpdateTick } from "./self-update";
 import { autoUpdateTick } from "./release-ops";
 import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
+import { peerHold, peerRelease, peerStatus, type HoldResult, type PeerStatus } from "./peer";
 
 /**
  * The app hands its built pages to the guardian here (assets.ts). Reached only
@@ -24,6 +25,20 @@ export class WorkerOpsAssets extends WorkerEntrypoint<Env> {
     options?: { config?: Record<string, unknown> },
   ): Promise<PublishResult> {
     return publishAssets(this.env, loadConfig(this.env), manifest, { read: (h) => read(h) }, options ?? {});
+  }
+
+  /** The app updating the guardian (peer.ts): which version answers, and whether it is busy. */
+  async status(): Promise<PeerStatus> {
+    return peerStatus(this.env, loadConfig(this.env));
+  }
+
+  /** Take the guardian's lock while the app replaces the guardian (peer.ts). */
+  async hold(ttlMs?: number): Promise<HoldResult> {
+    return peerHold(this.env, ttlMs);
+  }
+
+  async release(): Promise<void> {
+    await peerRelease(this.env);
   }
 }
 
