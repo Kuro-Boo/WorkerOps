@@ -50,6 +50,30 @@ export function pickRelease<T extends { tag_name?: string; prerelease?: boolean;
 }
 
 /**
+ * pickRelease over every page of the releases list, newest page first.
+ *
+ * ⚠ The guardian used to read only the first page (`per_page=100`). In a
+ * monorepo every component releases into the same list, so once a component's
+ * newest stable release fell behind 100 newer releases of other components it
+ * answered "no stable release" and the update stopped (2026-10-18). Read pages
+ * until the release is found or a page comes back short (the last page).
+ */
+export async function pickReleaseAcrossPages<
+  T extends { tag_name?: string; prerelease?: boolean; draft?: boolean },
+>(
+  fetchPage: (page: number) => Promise<T[]>,
+  prefix: string,
+  perPage: number,
+): Promise<(T & { tag: string }) | null> {
+  for (let page = 1; ; page++) {
+    const list = await fetchPage(page);
+    const picked = pickRelease(list, prefix);
+    if (picked) return picked;
+    if (list.length < perPage) return null;
+  }
+}
+
+/**
  * Newest tag out of a GitHub releases atom feed (entries are newest-first).
  *
  * Used for the `develop` channel, which needs prereleases included — the

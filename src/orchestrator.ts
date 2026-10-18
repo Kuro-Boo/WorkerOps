@@ -12,7 +12,7 @@ import {
   appendEvent,
 } from "./state";
 import { probeHealth, runMigrate } from "./health";
-import { pickRelease } from "./release-tag";
+import { pickReleaseAcrossPages } from "./release-tag";
 import { fetchRetry } from "./retry";
 import { nowIso, errMsg, sleep, OpsError } from "./util";
 import { keepGoodCode, restoreVersion } from "./assets";
@@ -130,14 +130,22 @@ async function fetchReleaseWorkerViaApi(
   let tag: string;
   if (config.releaseTagPrefix) {
     // A monorepo: /releases/latest names the newest release of ANY component,
-    // so read the list and take this component's newest stable one.
-    const listRes = await fetchRetry(
-      `https://api.github.com/repos/${repo}/releases?per_page=100`,
-      { headers: { ...headers, Accept: "application/vnd.github+json" } },
-      retry,
+    // so read the list and take this component's newest stable one — across
+    // pages, since other components' releases can push it past the first.
+    const PER_PAGE = 100;
+    const picked = await pickReleaseAcrossPages(
+      async (page) => {
+        const listRes = await fetchRetry(
+          `https://api.github.com/repos/${repo}/releases?per_page=${PER_PAGE}&page=${page}`,
+          { headers: { ...headers, Accept: "application/vnd.github+json" } },
+          retry,
+        );
+        if (!listRes.ok) throw new Error(`release lookup HTTP ${listRes.status}`);
+        return (await listRes.json()) as Rel[];
+      },
+      config.releaseTagPrefix,
+      PER_PAGE,
     );
-    if (!listRes.ok) throw new Error(`release lookup HTTP ${listRes.status}`);
-    const picked = pickRelease((await listRes.json()) as Rel[], config.releaseTagPrefix);
     if (!picked) throw new Error(`no stable release tagged ${config.releaseTagPrefix}vX.Y.Z`);
     rel = picked;
     tag = picked.tag;

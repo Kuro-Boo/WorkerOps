@@ -1,7 +1,12 @@
 // 契約テスト (node で直接実行: `npm run test:selfupdate`)。
 // 自己更新は「壊れた版に入れ替わると内側から戻せない」唯一の操作なので、
 // どの版を取りに行くかを決める 2 つの純粋関数を固定しておく。
-import { isNewer, parseAtomTag, pickRelease } from "./release-tag.ts";
+import {
+  isNewer,
+  parseAtomTag,
+  pickRelease,
+  pickReleaseAcrossPages,
+} from "./release-tag.ts";
 
 let failed = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -69,6 +74,30 @@ eq("リリースが 1 件でも取れる", parseAtomTag(
 ), "v1.2.3");
 
 console.log("");
+// ── pickReleaseAcrossPages: 最初のページに無くても、ページを送って見つける ────
+// 以前は 1 ページ(100 件)しか読まず、他の部品の版に押し出されると「安定版が無い」で止まった。
+{
+  const pages: Array<Array<{ tag_name: string; prerelease?: boolean }>> = [
+    Array.from({ length: 3 }, (_, i) => ({ tag_name: `Other/v1.0.${i}` })),
+    Array.from({ length: 3 }, (_, i) => ({ tag_name: `Other/v0.9.${i}` })),
+    [{ tag_name: "Admin/v0.2.0", prerelease: true }, { tag_name: "Admin/v0.1.9" }],
+  ];
+  const asked: number[] = [];
+  const got = await pickReleaseAcrossPages(
+    async (p) => (asked.push(p), pages[p - 1] ?? []),
+    "Admin/",
+    3,
+  );
+  eq("3 ページ目の安定版を見つける", got?.tag, "v0.1.9");
+  eq("見つけたら止まる", asked, [1, 2, 3]);
+  const none = await pickReleaseAcrossPages(
+    async (p) => pages[p - 1] ?? [],
+    "Nope/",
+    3,
+  );
+  eq("最後のページ(短いページ)まで無ければ null", none, null);
+}
+
 if (failed) {
   console.log(`${failed} 件 FAIL`);
   process.exit(1);
