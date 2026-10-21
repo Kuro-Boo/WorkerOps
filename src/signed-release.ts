@@ -238,7 +238,7 @@ export async function deploySignedRelease(
       startedAt: nowIso(), deployedAt: null, confirmedAt: null, finishedAt: null, error: null,
     });
     // An app with a MIGRATE_PATH keeps its own migration ledger: it is asked to
-    // migrate once the new version is live (as with the GitHub path). Only an app
+    // migrate once the new version is live. Only an app
     // without one gets the release's migrations applied to APP_DB here.
     if (!config.migratePath) {
       await appendEvent(env, "migrate", "run", `${release.migrations.length} migrations`);

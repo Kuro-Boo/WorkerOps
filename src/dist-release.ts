@@ -43,10 +43,15 @@ function base(env: Env): string {
   return (env.UPDATE_ORIGIN ?? "https://update.entamy.com").replace(/\/+$/, "");
 }
 
-/** Prefer a service binding when present (a Worker may not reach another Worker on the same zone over its public URL). */
+/**
+ * Prefer a service binding when present (a Worker may not reach another Worker on the same zone over its public URL).
+ * A product the endpoint keeps internal (Entamy's own Workers, e.g. Admin) is served only with a caller key
+ * allowed for that one product (RELEASE_READ_KEY). Public products ignore it.
+ */
 async function get(env: Env, path: string): Promise<Response> {
   const url = `${base(env)}${path}`;
-  return env.UPDATE ? env.UPDATE.fetch(url) : fetch(url);
+  const init = env.RELEASE_READ_KEY ? { headers: { "x-entamy-internal": env.RELEASE_READ_KEY } } : undefined;
+  return env.UPDATE ? env.UPDATE.fetch(url, init) : fetch(url, init);
 }
 
 export async function channelPointer(env: Env, config: Config, channel: ReleaseChannel = config.releaseChannel): Promise<Pointer | null> {

@@ -106,3 +106,15 @@ const envOf = (s: ReturnType<typeof store>) => ({ PRODUCT_ID: "billing", RELEASE
   assert.equal((await probeHealth({ APP_SERVICE: app("down") } as never, lenient)).ok, false, "down is never healthy");
   console.log("  ok   health: HEALTH_OK_STATES");
 }
+
+// ── an internal product is read with its caller key (RELEASE_READ_KEY) ──────
+{
+  const seen: Array<string | null> = [];
+  const update = { async fetch(_url: string, init?: RequestInit) { seen.push(new Headers(init?.headers).get("x-entamy-internal")); return new Response("{}", { status: 404 }); } };
+  const withKey = { PRODUCT_ID: "admin", UPDATE: update, RELEASE_READ_KEY: "ik_admin", WORKEROPS_STATE: kv() } as never;
+  await channelPointer(withKey, loadConfig(withKey));
+  const without = { PRODUCT_ID: "cms", UPDATE: update, WORKEROPS_STATE: kv() } as never;
+  await channelPointer(without, loadConfig(without));
+  assert.deepEqual(seen, ["ik_admin", null]);
+  console.log("  ok   dist: RELEASE_READ_KEY is sent only when set");
+}

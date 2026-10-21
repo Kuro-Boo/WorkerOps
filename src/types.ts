@@ -41,6 +41,12 @@ export interface Env {
   UPDATE?: Fetcher;
   /** "stable" (default) or "dev". Which channel pointer is offered to the owner. */
   RELEASE_CHANNEL?: string;
+  /**
+   * Caller key for a product the distribution endpoint keeps internal (Entamy's own
+   * Workers, e.g. Admin). Allowed for that one product only (x_dist.{product}).
+   * Not needed for public products.
+   */
+  RELEASE_READ_KEY?: string;
   /** JSON array of trusted Ed25519 release public keys. */
   RELEASE_PUBKEYS?: string;
   /** Path prefix WorkerOps reserves for itself (default "/__workerops__"). */
