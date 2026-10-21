@@ -2,7 +2,7 @@
  * Failures reported to Entamy Defects (spec: workerops-workerops-ops, "失敗の知らせ").
  *
  * A guardian's failures are otherwise only visible by opening its /status one
- * install at a time. So when an update or a self-update FAILS, one event is
+ * install at a time. So when an update FAILS, one event is
  * sent. "Nothing newer" is not sent. One success is: the app updated and
  * confirmed (`workerops_app_updated`), sent as a record — not a defect — so
  * an update the guardian made leaves a trace next to the app's own reports.
@@ -18,8 +18,6 @@ const DEFECTS_URL = "https://defects.entamy.com/v1/defects";
 const TIMEOUT_MS = 5_000;
 
 export type DefectCode =
-  | "workerops_self_rolled_back"
-  | "workerops_self_failed"
   | "workerops_app_failed_predeploy"
   | "workerops_app_auto_reverted"
   | "workerops_app_manual_required"

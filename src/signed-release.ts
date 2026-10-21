@@ -27,6 +27,13 @@ const WORKER_LIMIT = 10 * 1024 * 1024;
 const MIGRATIONS_LIMIT = 5 * 1024 * 1024;
 const VERSION_KEY = "workerops:release:version";
 /**
+ * A version that was deployed and then reverted (health or migrate failed).
+ * Recorded for every guardian; only a store guardian (RELEASE_STORE) reads it,
+ * and then never deploys that version again on its own — the next one is
+ * whatever a person puts into the store next.
+ */
+export const failedKey = (version: string): string => `workerops:release:failed:${version}`;
+/**
  * Keys trusted when RELEASE_PUBKEYS is not set: the publisher keys of the default
  * distribution endpoint (https://update.entamy.com). Guardians installed before
  * PRODUCT_ID existed have no RELEASE_PUBKEYS, and the keys travel inside the
@@ -271,6 +278,7 @@ export async function deploySignedRelease(
         await keepGoodCode(env, config, versionId);
       } catch (error) {
         if (fromVersion) await restoreVersion(env, client, fromVersion, `WorkerOps auto-revert ${release.manifest.version}`, config.bindingTypes);
+        await env.WORKEROPS_STATE.put(failedKey(release.manifest.version), JSON.stringify({ at: nowIso(), error: errMsg(error) }));
         await appendEvent(env, "verify", "fail", errMsg(error));
         await setState(env, { status: fromVersion ? "reverted" : "manual_required", finishedAt: nowIso(), error: errMsg(error) });
       } finally {

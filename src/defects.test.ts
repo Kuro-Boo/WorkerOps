@@ -1,5 +1,5 @@
 // 契約テスト(`npm run test:defects`)。失敗したときだけ、符号だけを、1回だけ送る。
-import { appFailureCode, appRecordCode, lastFailedStep, getState, setState, setSelfState } from "./state";
+import { appFailureCode, appRecordCode, lastFailedStep, getState, setState } from "./state";
 import { installId, reportDefect } from "./defects";
 import type { Env } from "./types";
 
@@ -57,23 +57,16 @@ eq(
 );
 
 const env = fakeEnv();
-await reportDefect(env, "workerops_self_failed", { step: "self_fetch", note: "free text here" });
+await reportDefect(env, "workerops_app_failed_predeploy", { step: "fetch_release", note: "free text here" });
 const body = sent.pop()!;
 eq("製品と導入 ID で名乗る", [body.product_id, String(body.install_id).length], ["workerops", 32]);
 eq("アカウント ID そのものは送らない", JSON.stringify(body).includes("acc123"), false);
-eq("文は落とし、符号だけ送る", body.detail, { app: "cms", step: "self_fetch" });
+eq("文は落とし、符号だけ送る", body.detail, { app: "cms", step: "fetch_release" });
+eq("不具合は record を付けない", body.record, false);
 eq("導入 ID は決まった値", await installId(fakeEnv()), await installId(fakeEnv()));
 
-await reportDefect(fakeEnv({ DEFECTS: "off" }), "workerops_self_failed", {});
+await reportDefect(fakeEnv({ DEFECTS: "off" }), "workerops_app_failed_predeploy", {});
 eq("DEFECTS=off は送らない", sent.length, 0);
-
-const e2 = fakeEnv();
-await setSelfState(e2, { status: "updating" });
-await setSelfState(e2, { status: "rolled_back" });
-await setSelfState(e2, { status: "rolled_back" });
-eq("自己更新の巻き戻しは1回だけ送る", sent.map((x) => x.code), ["workerops_self_rolled_back"]);
-
-eq("不具合は record を付けない", sent[0]?.record, false);
 
 sent.length = 0;
 const e3 = fakeEnv();

@@ -25,6 +25,7 @@
 import type { Env } from "./types";
 import type { Config, ReleaseChannel } from "./config";
 import { verifyManifest, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
+import { fetchStoreRelease, storePointer } from "./store-release";
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 const MANIFEST_LIMIT = 256 * 1024;
@@ -50,6 +51,8 @@ async function get(env: Env, path: string): Promise<Response> {
 
 export async function channelPointer(env: Env, config: Config, channel: ReleaseChannel = config.releaseChannel): Promise<Pointer | null> {
   if (!config.productId) throw new Error("PRODUCT_ID is not configured");
+  // A store in the guardian's own account replaces the distribution endpoint (store-release.ts).
+  if (env.RELEASE_STORE) return storePointer(env.RELEASE_STORE, config.productId, channel);
   const r = await get(env, `/v1/dist/${config.productId}/channels/${channel}.json`);
   if (r.status === 404) return null;
   if (!r.ok) throw new Error(`release channel lookup failed: HTTP ${r.status}`);
@@ -62,6 +65,7 @@ export async function channelPointer(env: Env, config: Config, channel: ReleaseC
 export async function fetchDistRelease(env: Env, config: Config, version: string): Promise<SignedRelease> {
   if (!config.productId) throw new Error("PRODUCT_ID is not configured");
   if (!VERSION_RE.test(version)) throw new Error("release version is invalid");
+  if (env.RELEASE_STORE) return fetchStoreRelease(env.RELEASE_STORE, config.productId, version);
 
   const mr = await get(env, `/v1/dist/${config.productId}/${version}/manifest.json`);
   if (mr.status === 404) throw new Error(`release ${version} is not available (missing or withdrawn)`);

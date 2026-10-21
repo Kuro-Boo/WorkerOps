@@ -21,14 +21,18 @@
 import type { Env } from "./types";
 import type { Config, ReleaseChannel } from "./config";
 import { channelPointer, fetchDistRelease, type Pointer } from "./dist-release";
-import { compareVersion, currentReleaseVersion, deploySignedRelease } from "./signed-release";
+import { compareVersion, currentReleaseVersion, deploySignedRelease, failedKey } from "./signed-release";
 import { probeHealth } from "./health";
 import { errMsg, nowIso, OpsError } from "./util";
 
 const AUTO_KEY = "workerops:release:auto";
 const AUTO_BY_KEY = "workerops:release:auto_set";
 const CHANNEL_KEY = "workerops:release:channel";
-const LAST_AUTO_CHECK_KEY = "workerops:release:last_auto_check";
+/**
+ * The daily gate. Entamy's concierge (CoreSystem/concierge) deletes this key to make the next tick
+ * look right away (an urgent fix for managed installs) — the name is a contract: do not rename it.
+ */
+export const LAST_AUTO_CHECK_KEY = "workerops:release:last_auto_check";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
@@ -150,15 +154,22 @@ export async function setChannel(env: Env, config: Config, channel: unknown): Pr
 
 /** Called from `scheduled`. Does nothing if the owner switched automatic updates off. */
 export async function autoUpdateTick(env: Env, ctx: ExecutionContext, loaded: Config): Promise<void> {
-  // The daily gate first: the cron runs every few minutes and must not ask the app each time.
-  const last = Number((await env.WORKEROPS_STATE.get(LAST_AUTO_CHECK_KEY)) ?? "0");
-  if (Date.now() - last < DAY_MS) return;
-  // Record the attempt before any network call, so a failing lookup is not retried every tick.
-  await env.WORKEROPS_STATE.put(LAST_AUTO_CHECK_KEY, String(Date.now()));
+  // A store in this account (RELEASE_STORE) is read on every tick: the read stays
+  // in the account, and a version a person put there should go out within minutes.
+  const store = !!env.RELEASE_STORE;
+  if (!store) {
+    // The daily gate first: the cron runs every few minutes and must not ask the app each time.
+    const last = Number((await env.WORKEROPS_STATE.get(LAST_AUTO_CHECK_KEY)) ?? "0");
+    if (Date.now() - last < DAY_MS) return;
+    // Record the attempt before any network call, so a failing lookup is not retried every tick.
+    await env.WORKEROPS_STATE.put(LAST_AUTO_CHECK_KEY, String(Date.now()));
+  }
   const config = await resolveConfig(env, loaded);
   if (!config.productId) return;
   if (!await autoEnabled(env, config)) return;
   const info = await releaseInfo(env, config);
   if (!info.checkOk || !info.newer || !info.offered) return;
+  // A store guardian does not try a version again that it already reverted.
+  if (store && await env.WORKEROPS_STATE.get(failedKey(info.offered.version))) return;
   await applyRelease(env, ctx, config, info.offered.version);
 }

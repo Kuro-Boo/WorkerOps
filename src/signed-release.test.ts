@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { verifyArtifacts, verifyManifest } from "./signed-release.ts";
 import { channelPointer, fetchDistRelease } from "./dist-release.ts";
 import { loadConfig } from "./config.ts";
-import { autoUpdateTick, releaseInfo, resolveConfig, setAuto, setChannel } from "./release-ops.ts";
+import { autoUpdateTick, LAST_AUTO_CHECK_KEY, releaseInfo, resolveConfig, setAuto, setChannel } from "./release-ops.ts";
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 const worker = Buffer.from("export default {fetch(){return new Response('ok')}}");
@@ -107,6 +107,15 @@ info = await releaseInfo(ownerEnv as never, ownerConfig);
 assert.equal(info.channel, "dev");
 assert.ok(fetched.includes("/v1/dist/mushmanager/channels/dev.json"));
 await assert.rejects(() => setChannel(ownerEnv as never, ownerConfig, "beta"), /stable" or "dev/);
+// The concierge's "check now": within the day the tick does not look; once the gate key is deleted,
+// the very next tick does. The key name is the contract with CoreSystem/concierge.
+assert.equal(LAST_AUTO_CHECK_KEY, "workerops:release:last_auto_check");
+fetched.length = 0;
+await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
+assert.equal(fetched.length, 0, "the daily gate holds");
+await (ownerEnv.WORKEROPS_STATE as never as ReturnType<typeof kv>).delete(LAST_AUTO_CHECK_KEY);
+await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
+assert.ok(fetched.includes("/v1/dist/mushmanager/channels/dev.json"), "deleting the gate makes the next tick look");
 // Switched off by the owner: the tick does nothing, not even a lookup.
 await setAuto(ownerEnv as never, ownerConfig, false);
 assert.equal((await releaseInfo(ownerEnv as never, ownerConfig)).auto, false);

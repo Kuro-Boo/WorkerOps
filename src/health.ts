@@ -31,6 +31,7 @@ export async function probeHealth(env: Env, config: Config): Promise<HealthResul
     // live but unhealthy" from "old version still serving" (propagation lag).
     const body = (await res.json().catch(() => ({}))) as {
       ok?: boolean;
+      state?: unknown;
       version?: string;
       product_id?: unknown;
       update_policy?: { auto?: unknown; channel?: unknown };
@@ -41,7 +42,8 @@ export async function probeHealth(env: Env, config: Config): Promise<HealthResul
       ...(p.channel === "stable" || p.channel === "dev" ? { channel: p.channel as "stable" | "dev" } : {}),
     } : undefined;
     return {
-      ok: res.ok && body?.ok === true,
+      ok: res.ok && (body?.ok === true
+        || (typeof body?.state === "string" && (config.healthOkStates?.has(body.state) ?? false))),
       version: typeof body?.version === "string" ? body.version : undefined,
       status: res.status,
       ...(typeof body?.product_id === "string" && PRODUCT_RE.test(body.product_id) ? { productId: body.product_id } : {}),

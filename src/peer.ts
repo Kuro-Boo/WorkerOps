@@ -24,8 +24,11 @@ export interface PeerStatus {
   service: "workerops";
   version: string;
   state: UpdateStatus;
-  /** Whether this guardian still replaces itself (SELF_UPDATE / OPS_WORKER_NAME). */
-  selfUpdate: boolean;
+  /**
+   * Always false: the guardian never replaces itself — the app it watches does
+   * (cms-workerops「番人の更新は app が行う」). Kept because apps read it.
+   */
+  selfUpdate: false;
   /** The guardian's lock is taken (an operation, or an app's hold). */
   locked: boolean;
 }
@@ -36,13 +39,13 @@ export type HoldResult = { ok: true } | { ok: false; reason: "update_in_progress
 export const HOLD_MAX_MS = 10 * 60 * 1000;
 const HOLD_MIN_MS = 60 * 1000;
 
-export async function peerStatus(env: Env, config: Config): Promise<PeerStatus> {
+export async function peerStatus(env: Env, _config: Config): Promise<PeerStatus> {
   const [state, lock] = await Promise.all([getState(env), env.WORKEROPS_STATE.get(LOCK_KEY)]);
   return {
     service: "workerops",
     version: WORKEROPS_VERSION,
     state: state.status,
-    selfUpdate: config.selfUpdateEnabled,
+    selfUpdate: false,
     locked: !!lock,
   };
 }

@@ -3,7 +3,6 @@ import type { Env } from "./types";
 import { loadConfig } from "./config";
 import { handleOps, maintenancePage } from "./ops";
 import { watchdogTick } from "./orchestrator";
-import { rememberOrigin, selfUpdateTick } from "./self-update";
 import { autoUpdateTick } from "./release-ops";
 import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
 import { peerHold, peerRelease, peerStatus, type HoldResult, type PeerStatus } from "./peer";
@@ -55,19 +54,6 @@ export default {
     if (pathname === config.opsPath || pathname.startsWith(config.opsPath + "/")) {
       return handleOps(request, env, ctx, config);
     }
-
-    // Look for a newer WorkerOps release. Deliberately NOT on the ops paths:
-    // the self-update verifies itself by fetching {opsPath}/api/v1/health over
-    // the public URL, and triggering from there could re-enter the update.
-    // Cheap on the hot path — an in-isolate gate returns before touching KV
-    // until the interval has elapsed.
-    const origin = new URL(request.url).origin;
-    ctx.waitUntil(
-      rememberOrigin(env, origin)
-        .catch(() => {})
-        .then(() => selfUpdateTick(env, config, origin))
-        .catch(() => {}),
-    );
 
     // Everything else is forwarded to the app Worker via the service binding.
     // If the app is unreachable, serve the maintenance page (graceful degrade).

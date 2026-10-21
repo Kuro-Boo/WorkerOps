@@ -1,13 +1,12 @@
 import { applyRelease, releaseInfo, resolveConfig, setAuto, setChannel } from "./release-ops";
 import type { Env } from "./types";
 import type { Config } from "./config";
-import { getState, getSelfState, setSelfState } from "./state";
-import { deployLatest, runRevert, watchdogTick } from "./orchestrator";
+import { getState } from "./state";
+import { runRevert, watchdogTick } from "./orchestrator";
 import { assetsRecord } from "./assets";
 import { probeHealth } from "./health";
 import { fetchAppIncidents } from "./incidents";
 import { WORKEROPS_VERSION } from "./version";
-import { selfCheckNow } from "./self-update";
 import { CfClient } from "./cf";
 import { jsonResponse, constantTimeEqual, OpsError } from "./util";
 
@@ -43,9 +42,8 @@ export async function handleOps(
     // Status payload (public). Shared by the recovery page and the REST API.
     const status = async (): Promise<Response> => {
       ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
-      const [state, self, activeVersionId, health, incidents, release, assets] = await Promise.all([
+      const [state, activeVersionId, health, incidents, release, assets] = await Promise.all([
         getState(env),
-        getSelfState(env),
         new CfClient(config.token, config.accountId, config.appWorkerName, {
           max: 1,
           baseMs: config.retryBaseMs,
@@ -60,8 +58,8 @@ export async function handleOps(
       return jsonResponse({
         app: {
           workerName: config.appWorkerName,
-          releaseSource: config.releaseSource,
-          releaseAsset: config.releaseAsset,
+          productId: config.productId,
+          releaseStore: !!env.RELEASE_STORE,
           healthPath: config.healthPath,
           migratePath: config.migratePath,
           opsPath: config.opsPath,
@@ -76,14 +74,9 @@ export async function handleOps(
         },
         state,
         assets,
-        self: {
-          ...self,
-          version: WORKEROPS_VERSION,
-          releaseSource: config.selfReleaseSource,
-          enabled: config.selfUpdateEnabled,
-          intervalMs: config.selfUpdateIntervalMs,
-          workerName: config.opsWorkerName,
-        },
+        // The guardian does not replace itself: the app it fronts updates it
+        // (cms-workerops「番人の更新は app が行う」). It only names its version.
+        self: { version: WORKEROPS_VERSION },
         cf: { activeVersionId },
         health,
         incidents,
@@ -99,9 +92,9 @@ export async function handleOps(
     }
 
     // REST API liveness (for AI/external callers).
-    // ⚠ `version` is what a self-update checks to decide whether the new build
-    //   actually took. Do not remove it, and do not make this handler depend on
-    //   anything that can fail — it is also the app-independent liveness probe.
+    // ⚠ `version` is what the app checks after it replaced the guardian. Do not
+    //   remove it, and do not make this handler depend on anything that can
+    //   fail — it is also the app-independent liveness probe.
     if (request.method === "GET" && sub === "/api/v1/health") {
       return jsonResponse({
         ok: true,
@@ -127,53 +120,6 @@ export async function handleOps(
       return jsonResponse({ ok: true, authorized: true, service: "workerops" });
     }
 
-    // Update channel. Reading is public (the console shows it); changing it is
-    // an operation — it decides which code this guardian will install into
-    // itself — so it takes the token like any other operation.
-    if (request.method === "GET" && sub === "/api/v1/channel") {
-      const self = await getSelfState(env);
-      return jsonResponse({ channel: self.channel });
-    }
-    if (
-      (request.method === "PUT" || request.method === "POST") &&
-      sub === "/api/v1/channel"
-    ) {
-      requireToken(request, config);
-      const body = (await request.json().catch(() => ({}))) as {
-        channel?: string;
-      };
-      const wanted = String(body.channel || "").toLowerCase();
-      if (wanted !== "stable" && wanted !== "develop") {
-        throw new OpsError(
-          400,
-          "bad_channel",
-          'channel must be "stable" or "develop".',
-        );
-      }
-      const next = await setSelfState(env, { channel: wanted });
-      return jsonResponse({ ok: true, channel: next.channel });
-    }
-
-    // Check for a newer WorkerOps now, without waiting for the 3-hour window
-    // (for urgent fixes). Same release, same safeguards as the periodic check —
-    // it only brings the check forward. Waits for the result.
-    if (request.method === "POST" && sub === "/api/v1/self/check") {
-      requireToken(request, config);
-      const r = await selfCheckNow(env, config, new URL(request.url).origin);
-      if (!r.ok) {
-        const status = r.error === "too_soon" ? 429 : 409;
-        throw new OpsError(status, r.error, {
-          self_update_disabled: "Self-update is off for this guardian (OPS_WORKER_NAME missing or SELF_UPDATE off).",
-          too_soon: "Checked less than a minute ago. Try again shortly.",
-          busy: "An app update or another self-update is in progress.",
-        }[r.error]);
-      }
-      const self = await getSelfState(env);
-      // This isolate still runs the old code; after an update the running version is the one found.
-      const version = r.outcome === "updated" && r.found ? r.found.replace(/^v/, "") : r.before;
-      return jsonResponse({ ...r, version, events: self.events });
-    }
-
     // Release offered by the distribution endpoint (PRODUCT_ID set). Public,
     // like status: it says which version could be installed — nothing more.
     if (request.method === "GET" && sub === "/api/v1/release") {
@@ -197,20 +143,19 @@ export async function handleOps(
     }
 
     // Operations — require WORKER_OPS_TOKEN. Both the page paths and /api/v1.
-    // With PRODUCT_ID the version comes from the distribution endpoint: the one the
-    // owner named in the body, or the offered one the console displayed.
+    // The version comes from the distribution endpoint (or RELEASE_STORE): the one
+    // the owner named in the body, or the offered one the console displayed.
+    // There is no other source (GitHub releases are not read — 2026-10-21).
     if (request.method === "POST" && (sub === "/update" || sub === "/api/v1/update")) {
       requireToken(request, config);
-      if (config.productId) {
-        const body = (await request.json().catch(() => ({}))) as { version?: unknown };
-        return applyRelease(env, ctx, config, typeof body.version === "string" ? body.version : undefined);
-      }
-      return jsonResponse(await deployLatest(env, ctx, config, "update"));
+      if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
+      const body = (await request.json().catch(() => ({}))) as { version?: unknown };
+      return applyRelease(env, ctx, config, typeof body.version === "string" ? body.version : undefined);
     }
     if (request.method === "POST" && (sub === "/reinstall" || sub === "/api/v1/reinstall")) {
       requireToken(request, config);
-      if (config.productId) return applyRelease(env, ctx, config, undefined, true);
-      return jsonResponse(await deployLatest(env, ctx, config, "reinstall"));
+      if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
+      return applyRelease(env, ctx, config, undefined, true);
     }
     if (request.method === "POST" && (sub === "/revert" || sub === "/api/v1/revert")) {
       requireToken(request, config);
@@ -330,10 +275,6 @@ hr{border:0;border-top:1px solid #334155;margin:14px 0}
 <div class="ct"><span class="cl" id="relChanLabel"></span>
 <select id="relChan" class="langsel" onchange="pickChannel(this)"><option value="stable"></option><option value="dev"></option></select></div>
 <p class="cd" id="relDesc"></p></div>
-<div class="chan">
-<div class="ct"><span class="cl" id="chanLabel"></span>
-<button class="sw" id="chanSw" role="switch" aria-checked="false" onclick="toggleChannel()" aria-label="develop"></button></div>
-<p class="cd" id="chanDesc"></p></div>
 <p class="safe" id="safeNote"></p>
 </div>
 <p class="foot"><a href="https://kuro.boo/" target="_blank" rel="noopener">WorkerOps: Kuro.Boo</a></p></div>
@@ -354,7 +295,7 @@ var STR={
   relAutoOff:'自動更新を切にします。新しい版は「Update」を押したときだけ入ります。続けますか？',
   running:'稼働 version',ustate:'更新状態',active:'CF active version',lastgood:'last-good',fromto:'from → to',
   prev:'prev app version',intended:'intended release',times:'開始 / 確定 / 終了',worker:'app worker',
-  release:'release source',hm:'health / migrate',hwin:'health 窓 / 間隔',
+  release:'取得先',hm:'health / migrate',hwin:'health 窓 / 間隔',
   retryUpd:'更新の再試行回数',retryUpdHint:'更新中に Cloudflare API の呼び出しが失敗したとき、間隔を空けて最大 {n} 回までやり直します。',
   retryRev:'巻き戻しの再試行回数',retryRevHint:'巻き戻しに失敗したままだと復旧できなくなるため、更新より多めに粘ります（最大 {n} 回）。',
   autoRev:'自動巻き戻しの実行回数',
@@ -370,16 +311,7 @@ var STR={
   t_reinstall:'Rebuild',d_reinstall:'Worker を作り直して再インストールします',
   t_update:'Update',d_update:'配布元から今すぐ版を取得して更新します',
   safe:'<b>この 3 つの操作が入れ替えるのは Worker（プログラム本体）だけです。</b>接続されている D1（データベース）・KV・R2（画像などのファイル）には一切書き込みません。記事・設定・アップロード済みのファイルはそのまま残り、バインディングも現在の設定を引き継ぎます。',
-  selfVer:'WorkerOps の版',selfChan:'更新チャンネル',selfCount:'自己更新の実行回数',
-  selfVerHint:'この復旧コンソール自身の版。新しい安定版が出ると{iv}時間ごとに自動で入れ替わります（利用者の操作は不要）。',
-  selfOffHint:'自己更新は無効です（OPS_WORKER_NAME 未設定）。自分の Worker 名が分からない guardian は自分を入れ替えません。',
-  selfCountHint:'成功 {n} 回 / 検証に失敗して戻した回数 {r} 回。最後: {at}',
-  selfCountHint0:'まだ一度も自己更新していません。',
-  selfState:'自己更新の状態',
-  chanLabel:'develop 版を受け入れる（非推奨）',
-  chanDesc:'<b>通常は OFF のままにしてください。</b>OFF のとき、この guardian は<b>安定版だけ</b>を自動で取り込みます。ON にすると検証前の prerelease まで取り込むため、<b>復旧コンソールごと壊れる可能性があります</b>（guardian が起動できない版に入れ替わると、内側から戻す手段がありません）。開発者が自分の instance で新版を試すためのスイッチです。',
-  chanOn:'develop（非推奨）',chanOff:'stable（推奨）',
-  chanConfirm:'develop 版の受け入れを ON にします。検証前の prerelease が自動で導入され、この復旧コンソールごと失われる可能性があります。続けますか？',
+  selfVer:'WorkerOps の版',selfVerHint:'この復旧コンソール自身の版。入れ替えるのは、見守っている app です（自己更新はしません）。',
   st_self_found:'新しい版を検出',st_self_read_active:'現在の version を確認',st_self_fetch:'新しい版を取得',
   st_self_read_settings:'設定とバインディングを読み出し',st_self_upload:'新しい版をアップロード',
   st_self_deploy:'新しい版を配備',st_self_verify:'公開URL越しに新版を検証',st_self_rollback:'自己更新を巻き戻し',
@@ -418,16 +350,7 @@ var STR={
   t_reinstall:'Rebuild',d_reinstall:'Recreate and reinstall the Worker',
   t_update:'Update',d_update:'Fetch and deploy a release from the distribution source now',
   safe:'<b>These three operations replace the Worker (the program) and nothing else.</b> They never write to the D1 database, KV, or R2 bucket bound to it. Articles, settings and uploaded files stay exactly as they are, and the current bindings are carried over.',
-  selfVer:'WorkerOps version',selfChan:'update channel',selfCount:'self-updates',
-  selfVerHint:'The version of this recovery console itself. It replaces itself automatically when a new stable release appears (checked every {iv}h, no user action).',
-  selfOffHint:'Self-update is off (OPS_WORKER_NAME is unset). A guardian that cannot name itself never replaces itself.',
-  selfCountHint:'{n} succeeded / {r} rolled back after failing verification. Last: {at}',
-  selfCountHint0:'Has never self-updated.',
-  selfState:'self-update state',
-  chanLabel:'Accept develop builds (not recommended)',
-  chanDesc:'<b>Leave this OFF.</b> While off, this guardian installs <b>stable releases only</b>. Turning it on installs unvetted prereleases, which <b>can take the recovery console down with it</b> — if the guardian boots into a broken build, nothing inside can put it back. It exists so the developer can exercise a release on their own instance.',
-  chanOn:'develop (not recommended)',chanOff:'stable (recommended)',
-  chanConfirm:'This enables develop builds. Unvetted prereleases will be installed automatically and may take this recovery console with them. Continue?',
+  selfVer:'WorkerOps version',selfVerHint:'The version of this recovery console itself. The app it watches replaces it (it never replaces itself).',
   st_self_found:'New version found',st_self_read_active:'Read the live version',st_self_fetch:'Download the new version',
   st_self_read_settings:'Read settings and bindings',st_self_upload:'Upload the new version',
   st_self_deploy:'Deploy the new version',st_self_verify:'Verify the new version over the public URL',st_self_rollback:'Roll the self-update back',
@@ -465,38 +388,13 @@ function applyLabels(){
  setText('t_update',t('t_update'));setText('d_update',t('d_update'));
  setText('dlgClose',t('close'));
  document.getElementById('safeNote').innerHTML=t('safe');
- syncChannelUi((lastData&&lastData.self)||{});
  if(lastData){render(lastData);}else{setText('loading',t('loading'));}}
 function setLang(v){lang=v;try{localStorage.setItem('wo_lang',v);}catch(e){}applyLabels();if(tracking)renderSteps(lastData);}
 async function loadStatus(){setErr('');
  try{var r=await fetch(OPS+'/status');var d=await r.json();
  if(!r.ok){setErr(d.message||d.error||('HTTP '+r.status));return;}render(d);}catch(e){setErr(String(e));}}
 function selfRows(sf){
- var iv=Math.max(1,Math.round((sf.intervalMs||0)/3600000));
- var chan=sf.channel==='develop'?t('chanOn'):t('chanOff');
- var cnt=sf.updateCount||0,rb=sf.rollbackCount||0;
- var cntHint=(cnt||rb)?fill(t('selfCountHint'),{n:cnt,r:rb,at:esc(sf.lastUpdateAt||'—')}):t('selfCountHint0');
- return rowH(t('selfVer'),esc(sf.version||'—'),sf.enabled?fill(t('selfVerHint'),{iv:iv}):t('selfOffHint'))+
-  row(t('selfChan'),esc(chan))+
-  rowH(t('selfCount'),'<span class="num '+(rb>0?'bad':'good')+'">'+cnt+'</span> '+t('unit'),cntHint)+
-  (sf.status&&sf.status!=='idle'?row(t('selfState'),esc(sf.status)+(sf.error?(' — '+esc(sf.error)):'')):'');}
-function syncChannelUi(sf){
- var sw=document.getElementById('chanSw');if(!sw)return;
- var on=(sf&&sf.channel)==='develop';
- sw.setAttribute('aria-checked',on?'true':'false');
- setText('chanLabel',t('chanLabel'));
- document.getElementById('chanDesc').innerHTML=t('chanDesc');}
-async function toggleChannel(){setErr('');
- if(!tok()){setErr(t('needtok'));return;}
- var cur=(lastData&&lastData.self&&lastData.self.channel)||'stable';
- var next=cur==='develop'?'stable':'develop';
- if(next==='develop'&&!confirm(t('chanConfirm')))return;
- try{var r=await fetch(OPS+'/api/v1/channel',{method:'PUT',
-  headers:{'authorization':'Bearer '+tok(),'content-type':'application/json'},
-  body:JSON.stringify({channel:next})});
- var d=await r.json();
- if(!r.ok){setErr(d.message||d.error||('HTTP '+r.status));return;}
- loadStatus();}catch(e){setErr(String(e));}}
+ return rowH(t('selfVer'),esc(sf.version||'—'),t('selfVerHint'));}
 function autoRevertRow(s){
  var n=s.autoRevertCount||0;
  var v='<span class="num '+(n>0?'bad':'good')+'">'+n+'</span> '+t('unit');
@@ -554,13 +452,12 @@ function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=
  row(t('intended'),esc(s.intendedRelease||'—'))+
  row(t('times'),esc(s.startedAt||'—')+' / '+esc(s.confirmedAt||'—')+' / '+esc(s.finishedAt||'—'))+
  row(t('worker'),esc(app.workerName||'—'))+
- row(t('release'),esc(app.releaseSource||'—')+' ('+esc(app.releaseAsset||'')+')')+
+ row(t('release'),app.productId?(app.releaseStore?'KV ':'update ')+esc(app.productId):'—')+
  row(t('hm'),esc(app.healthPath||'—')+' / '+esc(app.migratePath||'—'))+
  row(t('hwin'),esc(tn.healthWindowMs)+'ms / '+esc(tn.healthIntervalMs)+'ms')+
  rowH(t('retryUpd'),esc(tn.retryMax)+' '+t('unit'),fill(t('retryUpdHint'),{n:esc(tn.retryMax)}))+
  rowH(t('retryRev'),esc(tn.revertRetryMax)+' '+t('unit'),fill(t('retryRevHint'),{n:esc(tn.revertRetryMax)}));
  var ot=document.getElementById('opTarget');if(ot)ot.textContent=t('optarget');
- syncChannelUi(d.self||{});
  syncReleaseUi(d.release);
  if(tracking)renderSteps(d);}
 function stepIcon(st){return st==='ok'?'✓':(st==='fail'?'✕':'●');}

@@ -9,6 +9,13 @@ export interface Env {
   WORKEROPS_STATE: KVNamespace;
   /** App database used only for signed, additive release migrations. */
   APP_DB?: D1Database;
+  /**
+   * Releases kept in a KV namespace of this account, used instead of the
+   * distribution endpoint (store-release.ts). A person approves a version by
+   * putting it there; nothing is fetched from outside the account.
+   * Needs PRODUCT_ID. Checked on every cron tick (a store read stays in the account).
+   */
+  RELEASE_STORE?: KVNamespace;
 
   // ── Secrets ────────────────────────────────────────────────────────────
   /** Cloudflare API token (Workers Scripts:Edit) used to update/revert the app. */
@@ -36,44 +43,29 @@ export interface Env {
   RELEASE_CHANNEL?: string;
   /** JSON array of trusted Ed25519 release public keys. */
   RELEASE_PUBKEYS?: string;
-  /**
-   * Legacy release source for the app worker.js, e.g. GitHub "owner/repo".
-   * Used only when PRODUCT_ID is not set.
-   */
-  RELEASE_SOURCE?: string;
-  /**
-   * Tag prefix when RELEASE_SOURCE is a monorepo holding several components'
-   * releases (e.g. "Admin/" for tags like "Admin/v0.1.2"). Default: none.
-   * Needs GITHUB_TOKEN (the prefix is resolved through the releases list API).
-   */
-  RELEASE_TAG_PREFIX?: string;
-  /** private リリースを読むための token。未設定なら未認証経路(public 用・既定)。 */
-  GITHUB_TOKEN?: string;
-  /** Release asset filename (default "worker.js"). */
-  RELEASE_ASSET?: string;
   /** Path prefix WorkerOps reserves for itself (default "/__workerops__"). */
   OPS_PATH?: string;
+  /**
+   * Health states (the contract's `state`) that count as healthy, comma-separated.
+   * Unset: only `ok: true` counts (unchanged). An app that reports `degraded`
+   * for a missing setting rather than broken code can set "ok,degraded", so a
+   * new version is reverted only when it is `down` or does not answer.
+   */
+  HEALTH_OK_STATES?: string;
   /** App health path returning {ok, version} (default "/health"). */
   HEALTH_PATH?: string;
   /** Optional app endpoint to run one-shot/migrations during an update. */
   MIGRATE_PATH?: string;
 
-  // ── Self-update (the guardian updating ITSELF) ─────────────────────────
-  /**
-   * Name of THIS guardian's own Worker script. Self-update is DISABLED unless
-   * it is set — a guardian that cannot name itself must never try to replace
-   * itself, and "off" is the only safe default for a component whose failure
-   * has no in-band recovery.
-   */
   /** "off" stops failure reports to Entamy Defects (sent by default). */
   DEFECTS?: string;
+  /**
+   * There is no self-update: the app the guardian watches replaces it
+   * (cms-workerops「番人の更新は app が行う」・2026-10-21). OPS_WORKER_NAME and
+   * SELF_UPDATE left on older installs are ignored (OPS_WORKER_NAME still names the install).
+   */
+  /** This guardian's own script name. Only names the install in failure reports (defects.ts installId). */
   OPS_WORKER_NAME?: string;
-  /** Repo holding WorkerOps' own releases (default "Kuro-Boo/WorkerOps"). */
-  SELF_RELEASE_SOURCE?: string;
-  /** How often to look for a new WorkerOps release (default 3h). */
-  SELF_UPDATE_INTERVAL_MS?: string;
-  /** Set to "0"/"false" to switch self-update off even when named. */
-  SELF_UPDATE?: string;
 
   // ── Tunables (optional, string env) ────────────────────────────────────
   RETRY_MAX?: string;
