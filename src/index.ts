@@ -2,8 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./types";
 import { loadConfig } from "./config";
 import { handleOps, maintenancePage } from "./ops";
-import { watchdogTick } from "./orchestrator";
-import { autoUpdateTick } from "./release-ops";
+import { handleRevive, handleTick, runTick } from "./tick";
 import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
 import { peerHold, peerRelease, peerStatus, type HoldResult, type PeerStatus } from "./peer";
 
@@ -51,6 +50,16 @@ export default {
     const config = loadConfig(env);
     const { pathname } = new URL(request.url);
 
+    // The minute from a hosting account's concierge (tick.ts). Before handleOps: that resolves the
+    // config with a call to the app, which a minute's call should not pay for.
+    if (pathname === config.opsPath + "/api/v1/tick" && request.method === "POST") {
+      return handleTick(env, ctx, config, request);
+    }
+    // The installer asks a guardian to bring a stopped concierge back (concierge-revive.ts). Same token.
+    if (pathname === config.opsPath + "/api/v1/concierge/revive" && request.method === "POST") {
+      return handleRevive(env, config, request);
+    }
+
     if (pathname === config.opsPath || pathname.startsWith(config.opsPath + "/")) {
       return handleOps(request, env, ctx, config);
     }
@@ -70,15 +79,16 @@ export default {
     }
   },
 
-  /** Watchdog: finishes any update stuck in `deployed_unverified`. */
+  /**
+   * Watchdog (finishes any update stuck in `deployed_unverified`), automatic updates (only when the
+   * owner switched them on), and the app's minute when APP_TICK is "1" (tick.ts). Hosting accounts
+   * have no cron here: their concierge calls POST {OPS_PATH}/api/v1/tick instead.
+   */
   async scheduled(
-    _event: ScheduledController,
+    event: ScheduledController,
     env: Env,
     ctx: ExecutionContext,
   ): Promise<void> {
-    const config = loadConfig(env);
-    ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
-    // Automatic updates: only when the owner switched them on (off by default).
-    ctx.waitUntil(autoUpdateTick(env, ctx as ExecutionContext, config).catch(() => {}));
+    await runTick(env, ctx, loadConfig(env), event.scheduledTime, { everyMinute: event.cron === "* * * * *" });
   },
 };
