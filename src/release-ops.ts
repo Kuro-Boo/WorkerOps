@@ -33,6 +33,12 @@ const CHANNEL_KEY = "workerops:release:channel";
  * look right away (an urgent fix for managed installs) — the name is a contract: do not rename it.
  */
 export const LAST_AUTO_CHECK_KEY = "workerops:release:last_auto_check";
+/**
+ * 運用者が指した版(委託・core-offering 3 節「版の更新は Admin が配る」・2026-10-24)。
+ * 連絡係(CoreSystem/concierge)が Admin の頼みで書く/消す。ある間は、チャンネルを追わずにこの版に
+ * 合わせる —— 前の版を指せば戻す(戻した版をチャンネルの自動更新が上書きしない)。消せばチャンネルへ戻る。
+ */
+export const PIN_KEY = "workerops:release:pinned";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
 
@@ -103,7 +109,9 @@ export async function releaseInfo(env: Env, config: Config): Promise<ReleaseInfo
     runningVersion(env, config), autoEnabled(env, config), releaseChannel(env, config), appDeclaration(env, config),
   ]);
   const managedBy = decl.policy ? "app" as const : "guardian" as const;
-  const base = { productId: config.productId, channel, current, auto, managedBy, checkedAt: nowIso() };
+  // 運用者が指した版(PIN_KEY)。ある間はチャンネルを追わない。
+  const pinned = (await env.WORKEROPS_STATE.get(PIN_KEY))?.trim() || null;
+  const base = { productId: config.productId, channel, current, auto, managedBy, pinned, checkedAt: nowIso() };
   try {
     const offered = await channelPointer(env, config, channel);
     const newer = !!offered && (!current || compareVersion(offered.version, current) > 0);
@@ -153,7 +161,26 @@ export async function setChannel(env: Env, config: Config, channel: unknown): Pr
 }
 
 /** Called from `scheduled`. Does nothing if the owner switched automatic updates off. */
+/**
+ * 指された版に合わせる。合っていれば何もしない。入れて戻した版(failedKey)は繰り返さない ——
+ * 運用者が指し直せば、連絡係がその印を消してもう一度試す。持ち主の自動更新の入切は見ない
+ * (指すのは運用者で、委託の版は運用者が配る)。
+ */
+export async function pinnedTick(env: Env, ctx: ExecutionContext, loaded: Config, pin: string): Promise<void> {
+  if (!VERSION_RE.test(pin)) return;
+  if (await env.WORKEROPS_STATE.get(failedKey(pin))) return;
+  // 記録した版で先に比べる(毎分 app を叩かない)。違って見えたときだけ app に訊く。
+  if ((await currentReleaseVersion(env)) === pin) return;
+  const config = await resolveConfig(env, loaded);
+  if (!config.productId) return;
+  if ((await runningVersion(env, config)) === pin) return;
+  const release = await fetchDistRelease(env, config, pin);
+  await deploySignedRelease(env, ctx, config, release, false, true);
+}
+
 export async function autoUpdateTick(env: Env, ctx: ExecutionContext, loaded: Config): Promise<void> {
+  const pin = await env.WORKEROPS_STATE.get(PIN_KEY);
+  if (pin) return pinnedTick(env, ctx, loaded, pin.trim());
   // A store in this account (RELEASE_STORE) is read on every tick: the read stays
   // in the account, and a version a person put there should go out within minutes.
   const store = !!env.RELEASE_STORE;

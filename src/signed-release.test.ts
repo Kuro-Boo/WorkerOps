@@ -3,7 +3,7 @@ import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { verifyArtifacts, verifyManifest } from "./signed-release.ts";
 import { channelPointer, fetchDistRelease } from "./dist-release.ts";
 import { loadConfig } from "./config.ts";
-import { autoUpdateTick, LAST_AUTO_CHECK_KEY, releaseInfo, resolveConfig, setAuto, setChannel } from "./release-ops.ts";
+import { autoUpdateTick, LAST_AUTO_CHECK_KEY, PIN_KEY, releaseInfo, resolveConfig, setAuto, setChannel } from "./release-ops.ts";
 
 const sha = (b: Buffer) => createHash("sha256").update(b).digest("hex");
 const worker = Buffer.from("export default {fetch(){return new Response('ok')}}");
@@ -124,6 +124,33 @@ fetched.length = 0;
 await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
 assert.equal(fetched.length, 0);
 console.log("  ok   automatic updates on by default, owner picks the channel");
+
+// ── a version named by the operator (Admin → concierge → PIN_KEY) ──────────
+// 委託の版は Admin が配る(core-offering 3 節)。印がある間はチャンネルを見ず、その版に合わせる。
+// 持ち主の自動更新が切れていても合わせる。戻した版を何度も試さない。名前は連絡係との約束。
+{
+  const st = ownerEnv.WORKEROPS_STATE as never as ReturnType<typeof kv>;
+  assert.equal(PIN_KEY, "workerops:release:pinned");
+  await st.put(PIN_KEY, "1.2.3");
+  fetched.length = 0;
+  await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
+  assert.equal(fetched.length, 0, "already on the named version: nothing is fetched");
+  assert.equal((await releaseInfo(ownerEnv as never, ownerConfig)).pinned, "1.2.3", "the named version is reported");
+  // A different (here: older, not on the endpoint) version is fetched by its own manifest, not by the channel.
+  await st.put(PIN_KEY, "1.2.2");
+  fetched.length = 0;
+  await assert.rejects(() => autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig), /not available/);
+  assert.ok(fetched.includes("/v1/dist/mushmanager/1.2.2/manifest.json"), "the named version is looked up even with auto off");
+  assert.ok(!fetched.some((p) => p.includes("/channels/")), "the channel is not followed while a version is named");
+  // A version that was put in and reverted is not tried again every minute.
+  await st.put("workerops:release:failed:1.2.2", "{}");
+  fetched.length = 0;
+  await autoUpdateTick(ownerEnv as never, {} as ExecutionContext, ownerConfig);
+  assert.equal(fetched.length, 0);
+  await st.delete(PIN_KEY);
+  assert.equal((await releaseInfo(ownerEnv as never, ownerConfig)).pinned, null);
+}
+console.log("  ok   a version named by the operator wins over the channel");
 
 // ── a guardian without PRODUCT_ID follows what the app declares ─────────────
 // (guardians installed before PRODUCT_ID existed: no settings are touched)

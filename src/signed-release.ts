@@ -215,13 +215,18 @@ async function applyMigrations(env: Env, migrations: Array<{ name: string; sql: 
 
 export async function deploySignedRelease(
   env: Env, ctx: ExecutionContext, config: Config, release: SignedRelease, reinstall = false,
+  /**
+   * 前の版へ入れ替えてよいか。運用者が版を指したとき(release-ops.ts の PIN_KEY・Admin が委託へ
+   * 版を指して配る/戻す)だけ真。ふだんは古い版を入れない(取得口の誤りで版を下げないため)。
+   */
+  allowDowngrade = false,
 ): Promise<Response> {
   if (!config.token || !config.accountId || !config.appWorkerName) return response({ error: "cf_config_missing" }, 503);
   // What the app reports wins over our record: the app may have updated itself
   // (an app with its own update button) since we last deployed.
   const live = (await probeHealth(env, config)).version;
   const current = (live && VERSION_RE.test(live) ? live : null) ?? await env.WORKEROPS_STATE.get(VERSION_KEY);
-  if (current && compareVersion(release.manifest.version, current) < 0) return response({ error: "release_downgrade" }, 409);
+  if (current && !allowDowngrade && compareVersion(release.manifest.version, current) < 0) return response({ error: "release_downgrade" }, 409);
   // Rebuild puts the running version in again on purpose.
   if (current === release.manifest.version && !reinstall) return response({ ok: true, status: "already_current", version: current });
   if (!await acquireLock(env, config.lockTtlMs)) return response({ error: "update_in_progress" }, 409);
