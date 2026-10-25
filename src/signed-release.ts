@@ -12,6 +12,7 @@ import { CfClient } from "./cf";
 import { keepGoodCode, restoreVersion } from "./assets";
 import type { Config } from "./config";
 import { probeHealth, runMigrate } from "./health";
+import { addColumnTarget, createIndexName, splitSql } from "./sql";
 import {
   acquireLock,
   appendEvent,
@@ -200,16 +201,41 @@ export async function currentReleaseVersion(env: Env): Promise<string | null> {
 
 export { compareVersion };
 
-async function applyMigrations(env: Env, migrations: Array<{ name: string; sql: string }>): Promise<void> {
+/**
+ * 移行を 1 つずつ、文と当てた記録を 1 つのトランザクション(`batch()`)で当てる(2026-10-26)。
+ *
+ * 前は `exec()` に丸ごと渡していた。`exec()` は改行ごとに 1 文として流し、失敗した所で止まるので、
+ * 複数行の文で落ちると途中まで当たったまま記録が残らなかった(sql.ts)。
+ * その時に当たった分でやり直しが止まらないよう、**既にある列の ADD COLUMN は飛ばし、既にある索引は
+ * 消して移行どおりに作り直す**(索引は中身を持たないので作り直しても失うものが無い)。
+ */
+export async function applyMigrations(env: Env, migrations: Array<{ name: string; sql: string }>): Promise<void> {
   if (migrations.length === 0) return;
-  if (!env.APP_DB) throw new Error("APP_DB is not configured");
-  await env.APP_DB.exec("CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,applied_at TEXT NOT NULL)");
+  const db = env.APP_DB;
+  if (!db) throw new Error("APP_DB is not configured");
+  await db.prepare("CREATE TABLE IF NOT EXISTS d1_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,applied_at TEXT NOT NULL)").run();
   for (const migration of migrations) {
     if (!/^[0-9][A-Za-z0-9._-]*\.sql$/.test(migration.name)) throw new Error("migration name is invalid");
-    const applied = await env.APP_DB.prepare("SELECT 1 AS applied FROM d1_migrations WHERE name=?1").bind(migration.name).first();
+    const applied = await db.prepare("SELECT 1 AS applied FROM d1_migrations WHERE name=?1").bind(migration.name).first();
     if (applied) continue;
-    await env.APP_DB.exec(migration.sql);
-    await env.APP_DB.prepare("INSERT INTO d1_migrations(name,applied_at) VALUES(?1,?2)").bind(migration.name, nowIso()).run();
+    const statements: D1PreparedStatement[] = [];
+    for (const stmt of splitSql(migration.sql)) {
+      const add = addColumnTarget(stmt);
+      // D1 の文書にあるのは PRAGMA table_info(表の形の pragma_table_info() は載っていない)。
+      if (add && (await db.prepare(`PRAGMA table_info("${add.table}")`).all<{ name: string }>()).results.some((c) => c.name === add.column)) continue;
+      const index = createIndexName(stmt);
+      if (index && await db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type='index' AND name=?1").bind(index).first()) {
+        // 同じ移行の前の文で表ごと作り直していれば、索引はもう無い。
+        statements.push(db.prepare(`DROP INDEX IF EXISTS "${index}"`));
+      }
+      statements.push(db.prepare(stmt));
+    }
+    statements.push(db.prepare("INSERT INTO d1_migrations(name,applied_at) VALUES(?1,?2)").bind(migration.name, nowIso()));
+    try {
+      await db.batch(statements);
+    } catch (error) {
+      throw new Error(`migration ${migration.name} failed: ${errMsg(error)}`);
+    }
   }
 }
 
