@@ -7,7 +7,7 @@
  *   ③ 移行を当て、新しい版を配り、health が新しい版で応答するのを待って確定する。だめなら前の版へ戻す
  * の3つだけを行う。外から版を送り込まれる口は持たない —— 版を上げるかどうかは持ち主が決める。
  */
-import { filterBindings } from "./bindings";
+import { applyVars, filterBindings } from "./bindings";
 import { CfClient } from "./cf";
 import { keepGoodCode, restoreVersion } from "./assets";
 import type { Config } from "./config";
@@ -123,6 +123,27 @@ export interface SignedRelease {
   manifest: Manifest;
   worker: string;
   migrations: Array<{ name: string; sql: string }>;
+  /** 版が運ぶ設定の値(`role: "vars"`・wrangler.toml の [vars])。運ばない版は null。 */
+  vars?: Record<string, string> | null;
+}
+
+const VAR_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
+const VARS_MAX = 64;
+const VAR_TEXT_MAX = 4096;
+
+/** 設定の値の成果物を読む。名前・値・数の形が外れていれば版ごと断る。 */
+function parseVars(bytes: Uint8Array): Record<string, string> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { throw new Error("release vars are invalid"); }
+  const vars = (parsed as { vars?: unknown })?.vars;
+  if (!vars || typeof vars !== "object" || Array.isArray(vars)) throw new Error("release vars are invalid");
+  const entries = Object.entries(vars as Record<string, unknown>);
+  if (entries.length > VARS_MAX || entries.some(([name, text]) =>
+    !VAR_NAME.test(name) || typeof text !== "string" || text.length > VAR_TEXT_MAX)) {
+    throw new Error("release vars are invalid");
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
 }
 
 /** ① manifest の形と署名。**通るまで本体を取りに行かない。** */
@@ -185,7 +206,9 @@ export function verifyArtifactsSync(manifest: Manifest, files: Map<string, Uint8
       throw new Error("release migration declaration does not match");
     }
   }
-  return { manifest, worker: new TextDecoder().decode(workerBytes), migrations };
+  const varsArtifact = manifest.artifacts.find((item) => item.role === "vars");
+  const vars = varsArtifact ? parseVars(files.get(varsArtifact.name)!) : null;
+  return { manifest, worker: new TextDecoder().decode(workerBytes), migrations, vars };
 }
 
 export async function verifyArtifacts(manifest: Manifest, files: Map<string, Uint8Array>): Promise<SignedRelease> {
@@ -277,7 +300,8 @@ export async function deploySignedRelease(
       await appendEvent(env, "migrate", "ok");
     }
     const settings = await client.getSettings();
-    const bindings = filterBindings(settings.bindings, config.bindingTypes);
+    // 版が運ぶ設定の値を重ねる(版に無い値は残す・bindings.ts の applyVars)。
+    const bindings = applyVars(filterBindings(settings.bindings, config.bindingTypes), release.vars);
     const versionId = await client.uploadVersion(release.worker, bindings, settings.compatibility_date, settings.compatibility_flags);
     await setState(env, { toVersionId: versionId });
     await client.deployVersion(versionId, `WorkerOps signed release ${release.manifest.version}`);

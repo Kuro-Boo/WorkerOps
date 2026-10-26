@@ -36,3 +36,32 @@ export function filterBindings(
   }
   return out;
 }
+
+/**
+ * 版が運ぶ設定の値(wrangler.toml の [vars])を、引き継いだ binding に重ねる(2026-10-26・利用者の決定)。
+ *
+ * 番人は動いている Worker の binding を引き継いでコードだけを入れ替えるので、[vars] に足した値は
+ * 番人の道では届かなかった(Billing 0.0.9 の BILLING_ENVIRONMENT)。人の手を要らなくするため、版が値を運ぶ。
+ *   ・版にある値は足すか上書きする(plain_text)
+ *   ・**版に無い値は消さない** —— 取り違えた時に要る値まで消さないため。要らなくなった値は人が消す
+ *   ・同じ名前の別の型(secret・KV など)があれば止める。値で上書きすると、その binding が消える
+ */
+export function applyVars(
+  bindings: unknown[],
+  vars: Record<string, string> | null | undefined,
+): unknown[] {
+  if (!vars) return bindings;
+  const out = [...bindings];
+  for (const [name, text] of Object.entries(vars)) {
+    const at = out.findIndex((b) => (b as { name?: string })?.name === name);
+    const binding = { type: "plain_text", name, text };
+    if (at < 0) {
+      out.push(binding);
+      continue;
+    }
+    const type = (out[at] as { type?: string }).type;
+    if (type !== "plain_text") throw new Error(`release var ${name} collides with a ${type} binding`);
+    out[at] = binding;
+  }
+  return out;
+}

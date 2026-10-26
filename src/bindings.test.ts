@@ -1,6 +1,6 @@
 // 契約テスト (node で直接実行: `npm run test:bindings`)。
 // 更新時に app の binding を取りこぼさないことを固定する。
-import { filterBindings } from "./bindings.ts";
+import { applyVars, filterBindings } from "./bindings.ts";
 
 let failed = 0;
 const eq = (name: string, got: unknown, want: unknown) => {
@@ -90,6 +90,35 @@ eq(
   ]).length,
   8,
 );
+
+// 版が運ぶ設定の値(2026-10-26)。足す・上書きする・版に無い値は残す・別の型とぶつかれば止める。
+eq(
+  "版の値は足し、同じ名前の plain_text は上書きし、版に無い値は残す",
+  applyVars(
+    [
+      { type: "plain_text", name: "KEEP", text: "1" },
+      { type: "plain_text", name: "MODE", text: "old" },
+      { type: "inherit", name: "SECRET" },
+    ],
+    { MODE: "live", NEW_VAR: "x" },
+  ),
+  [
+    { type: "plain_text", name: "KEEP", text: "1" },
+    { type: "plain_text", name: "MODE", text: "live" },
+    { type: "inherit", name: "SECRET" },
+    { type: "plain_text", name: "NEW_VAR", text: "x" },
+  ],
+);
+eq("値を運ばない版は binding をそのまま", applyVars([{ type: "d1", name: "DB" }], null), [{ type: "d1", name: "DB" }]);
+{
+  let threw = "";
+  try {
+    applyVars([{ type: "inherit", name: "TOKEN" }], { TOKEN: "x" });
+  } catch (e) {
+    threw = String(e);
+  }
+  eq("secret と同じ名前の値は書かずに止める", /collides with a inherit binding/.test(threw), true);
+}
 
 if (failed) {
   console.error(`\n${failed} 件失敗`);
