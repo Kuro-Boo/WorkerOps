@@ -18,15 +18,19 @@ function tokenFromRequest(request: Request): string | null {
   return h ? h.trim() : null;
 }
 
-function requireToken(request: Request, config: Config): void {
+function hasToken(request: Request, config: Config): boolean {
   const t = tokenFromRequest(request);
-  if (!config.opsToken || !t || !constantTimeEqual(t, config.opsToken)) {
+  return !!config.opsToken && !!t && constantTimeEqual(t, config.opsToken);
+}
+
+function requireToken(request: Request, config: Config): void {
+  if (!hasToken(request, config)) {
     throw new OpsError(401, "unauthorized", "A valid WorkerOps token is required.");
   }
 }
 
-/** Routes everything under OPS_PATH. The recovery page (GET OPS_PATH) is public;
- *  all data/actions require the WorkerOps token. */
+/** Routes everything under OPS_PATH. With OPS_SCREEN=on the recovery page and status are
+ *  public and actions require the WorkerOps token; without it, everything requires the token. */
 export async function handleOps(
   request: Request,
   env: Env,
@@ -38,6 +42,13 @@ export async function handleOps(
   const url = new URL(request.url);
   let sub = url.pathname.slice(config.opsPath.length);
   if (sub === "") sub = "/";
+
+  // Unless the screen is switched on (secret OPS_SCREEN=on, customer installs), show nothing
+  // without the token — not the page, not the status. 404, not 401: do not tell that a guardian
+  // is here. /api/v1/health stays open (version only; the app checks it after replacing the guardian).
+  if (!config.opsScreen && sub !== "/api/v1/health" && !hasToken(request, config)) {
+    return jsonResponse({ error: "not_found" }, 404);
+  }
 
   try {
     // Status payload (public). Shared by the recovery page and the REST API.
@@ -184,7 +195,7 @@ export function maintenancePage(config: Config): string {
 <style>body{margin:0;background:#0f172a;color:#e2e8f0;font:15px/1.7 system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}.b{max-width:420px;text-align:center;padding:24px}a{color:#34d399}</style>
 </head><body><div class="b"><h1>メンテナンス中</h1>
 <p>現在アプリに接続できません。しばらくして再度お試しください。</p>
-<p><a href="${config.opsPath}/">復旧コンソール</a></p></div></body></html>`;
+${!config.opsScreen ? "" : `<p><a href="${config.opsPath}/">復旧コンソール</a></p>`}</div></body></html>`;
 }
 
 /** Self-contained recovery console. Status loads automatically (public);

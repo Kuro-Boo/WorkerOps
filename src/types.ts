@@ -52,6 +52,15 @@ export interface Env {
   /** Path prefix WorkerOps reserves for itself (default "/__workerops__"). */
   OPS_PATH?: string;
   /**
+   * Secret. "on": the recovery page and status under OPS_PATH are public (customer installs —
+   * their owner uses the page; the installer sets it). Unset or anything else: every OPS_PATH
+   * route answers 404 unless the WORKER_OPS_TOKEN is presented (only /api/v1/health stays open).
+   * Guardians of our own services (platform, Billing, Payout) leave it unset: the Entamy admin
+   * console operates them, so nothing about them is shown to the public. A secret, not a var:
+   * it survives guardian updates and is switched without touching the deployed settings.
+   */
+  OPS_SCREEN?: string;
+  /**
    * Health states (the contract's `state`) that count as healthy, comma-separated.
    * Unset: only `ok: true` counts (unchanged). An app that reports `degraded`
    * for a missing setting rather than broken code can set "ok,degraded", so a

@@ -20,6 +20,8 @@ export interface Config {
   accountId: string;
   appWorkerName: string;
   opsToken: string;
+  /** OPS_SCREEN=on: the page and status are public. Otherwise OPS_PATH answers only to the token (types.ts). */
+  opsScreen?: boolean;
   retryMax: number;
   retryBaseMs: number;
   revertRetryMax: number;
@@ -57,6 +59,7 @@ export function loadConfig(env: Env): Config {
     accountId: env.CF_ACCOUNT_ID ?? "",
     appWorkerName: env.APP_WORKER_NAME ?? "",
     opsToken: env.WORKER_OPS_TOKEN ?? "",
+    opsScreen: (env.OPS_SCREEN ?? "").trim() === "on",
     retryMax: int(env.RETRY_MAX, 3),
     retryBaseMs: int(env.RETRY_BASE_MS, 1000),
     revertRetryMax: int(env.REVERT_RETRY_MAX, 5),
