@@ -22,11 +22,6 @@ export interface Env {
   CF_API_TOKEN: string;
   /** Token guarding Ops operations (update/revert/reinstall). Viewing status is public. */
   WORKER_OPS_TOKEN: string;
-  /**
-   * Token for POST {OPS_PATH}/api/v1/tick (tick.ts) — the guardian's minute, called by a hosting
-   * account's concierge instead of a cron. It only runs the minute. Unset: the endpoint does not exist.
-   */
-  TICK_TOKEN?: string;
 
   // ── Vars (config) ──────────────────────────────────────────────────────
   CF_ACCOUNT_ID: string;
@@ -70,6 +65,11 @@ export interface Env {
 
   /** "1": the app takes the guardian's minute over APP_SERVICE (`tick(at)`) and has no cron of its own (tick.ts). */
   APP_TICK?: string;
+  /**
+   * "1": restart the app when its health fails during normal operation (restart.ts) — the serving
+   * version is deployed again, once per incident. Unset: the guardian only rolls back fresh updates.
+   */
+  APP_RESTART?: string;
   /** "off" stops failure reports to Entamy Defects (sent by default). */
   DEFECTS?: string;
   /**

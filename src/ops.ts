@@ -2,6 +2,7 @@ import { applyRelease, releaseInfo, resolveConfig, setAuto, setChannel } from ".
 import type { Env } from "./types";
 import type { Config } from "./config";
 import { getState } from "./state";
+import { getRestart, restartEnabled } from "./restart";
 import { runRevert, watchdogTick } from "./orchestrator";
 import { assetsRecord } from "./assets";
 import { probeHealth } from "./health";
@@ -55,6 +56,7 @@ export async function handleOps(
         config.productId ? releaseInfo(env, config).catch(() => null) : Promise.resolve(null),
         assetsRecord(env).catch(() => null),
       ]);
+      const restart = restartEnabled(env) ? await getRestart(env).catch(() => null) : null;
       return jsonResponse({
         app: {
           workerName: config.appWorkerName,
@@ -73,6 +75,7 @@ export async function handleOps(
           lockTtlMs: config.lockTtlMs,
         },
         state,
+        restart,
         assets,
         // The guardian does not replace itself: the app it fronts updates it
         // (cms-workerops「番人の更新は app が行う」). It only names its version.
@@ -198,7 +201,7 @@ h1{font-size:20px;margin:0 0 2px}.sub{color:#94a3b8;font-size:12px;margin:0 0 16
 .row{margin:5px 0;display:flex;gap:8px}.k{color:#94a3b8;flex:0 0 168px}.v{color:#e2e8f0;word-break:break-all}
 .v.stack{display:flex;flex-direction:column;gap:2px}
 .hint{color:#64748b;font-size:11px;line-height:1.45}
-.num{font-weight:700}.num.bad{color:#f87171}.num.good{color:#22c55e}
+.num{font-weight:700}.num.bad{color:#f87171}.num.good{color:#22c55e}.num.warn{color:#fbbf24}
 input{width:100%;padding:9px 10px;border-radius:8px;border:1px solid #475569;background:#1e293b;color:#e2e8f0;font-size:13px}
 .btns{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
 button.op{flex:1 1 150px;display:flex;flex-direction:column;align-items:flex-start;gap:10px;text-align:left;border:1px solid #334155;background:#1e293b;color:#e2e8f0;border-radius:12px;padding:18px 16px;min-height:150px;cursor:pointer;font:inherit}
@@ -299,7 +302,11 @@ var STR={
   retryUpd:'更新の再試行回数',retryUpdHint:'更新中に Cloudflare API の呼び出しが失敗したとき、間隔を空けて最大 {n} 回までやり直します。',
   retryRev:'巻き戻しの再試行回数',retryRevHint:'巻き戻しに失敗したままだと復旧できなくなるため、更新より多めに粘ります（最大 {n} 回）。',
   autoRev:'自動巻き戻しの実行回数',
-  autoRevHint0:'まだ一度もありません。WorkerOps が自動で行うのは更新直後の検証に失敗したときの巻き戻しだけで、平常運転中に落ちた Worker を再起動する機能はありません。',
+  autoRevHint0:'まだ一度もありません。WorkerOps が自動で行うのは更新直後の検証に失敗したときの巻き戻しだけで、平常運転中に落ちたときの再起動は、APP_RESTART=1 のときだけ行います（下の行）。',
+  restartRow:'自動の再起動',
+  restartHint0:'まだ一度もありません。平常運転中に 2 回続けて答えなければ、動いている版をそのまま置き直します（1 回の不調に 1 度）。',
+  restartHint:'累計。最後: {at} — {why}（{out}）{down}',
+  restartDown:'。置き直しても答えないため、人の確認を待っています',
   autoRevHint:'累計。更新直後の検証に失敗したときだけ自動で戻します。最後: {at} — {why}',
   times24:'24 時間で落ちた回数',
   times24Hint:'Cloudflare Analytics の集計。成功 {ok} 件に対する失敗 {n} 件で、{h} 個の時間帯にまたがっています。最後の発生: {last}',
@@ -338,7 +345,11 @@ var STR={
   retryUpd:'update retries',retryUpdHint:'If a Cloudflare API call fails during an update, it is retried up to {n} times with backoff.',
   retryRev:'rollback retries',retryRevHint:'A rollback that stays failed leaves no way back, so it is retried harder than an update (up to {n} times).',
   autoRev:'automatic rollbacks',
-  autoRevHint0:'None so far. The only thing WorkerOps does on its own is roll back when a fresh deploy fails verification — it does not restart a Worker that fails during normal operation.',
+  autoRevHint0:'None so far. The only thing WorkerOps does on its own is roll back when a fresh deploy fails verification — restarting a Worker that fails during normal operation happens only with APP_RESTART=1 (row below).',
+  restartRow:'automatic restarts',
+  restartHint0:'None so far. If the app fails two checks in a row during normal operation, the serving version is deployed again (once per incident).',
+  restartHint:'Lifetime total. Last: {at} — {why} ({out}){down}',
+  restartDown:'. It still does not answer after the restart; waiting for a person',
   autoRevHint:'Lifetime total. Triggered only when a fresh deploy fails verification. Last: {at} — {why}',
   times24:'failures in 24h',
   times24Hint:'From Cloudflare Analytics: {n} failed invocations against {ok} successful ones, spread over {h} hourly buckets. Last seen: {last}',
@@ -400,6 +411,12 @@ function autoRevertRow(s){
  var v='<span class="num '+(n>0?'bad':'good')+'">'+n+'</span> '+t('unit');
  var hint=n>0?fill(t('autoRevHint'),{at:esc(s.lastAutoRevertAt||'—'),why:esc(s.lastAutoRevertReason||'—')}):t('autoRevHint0');
  return rowH(t('autoRev'),v,hint);}
+function restartRow(r){
+ if(!r)return '';
+ var n=r.count||0;
+ var v='<span class="num '+(r.down?'bad':(n>0?'warn':'good'))+'">'+n+'</span> '+t('unit');
+ var hint=n>0?fill(t('restartHint'),{at:esc(r.lastAt||'—'),why:esc(r.lastReason||'—'),out:esc(r.lastOutcome||'—'),down:r.down?t('restartDown'):''}):t('restartHint0');
+ return rowH(t('restartRow'),v,hint);}
 function incidentsRow(inc){
  if(!inc)return '';
  if(!inc.available)return rowH(t('times24'),'—',fill(t('times24NA'),{why:esc(inc.reason||'unknown')}));
@@ -444,6 +461,7 @@ function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=
  row(t('ustate'),esc(s.status||'—')+(s.error?(' — '+esc(s.error)):''))+
  selfRows(d.self||{})+
  autoRevertRow(s)+
+ restartRow(d.restart)+
  incidentsRow(d.incidents)+
  row(t('active'),esc(cf.activeVersionId||'—'))+
  row(t('lastgood'),esc(s.lastGoodVersionId||'—'))+

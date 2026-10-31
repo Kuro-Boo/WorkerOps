@@ -17,6 +17,11 @@
  *   app の CF_API_TOKEN が消え、CMS の自己更新が "cf_creds_missing" で止まった。
  *   値は API から読めないため、`{type:"inherit", name}` で「既存を引き継ぐ」と
  *   宣言する（POST /versions が受理することを実測で確認）。
+ *
+ * ⚠ Service Binding も inherit で引き継ぐ(2026-10-30)。settings は束縛の props を返さないので、
+ *   読んだまま送ると props の無い束縛になる。委託の app は連絡係への束縛の props で導入を名乗る
+ *   (core-offering 15.3)ので、載せ直すと名乗れなくなる。inherit は entrypoint・props ごと前の版から
+ *   引き継ぐ(試験用の口座で実測・ops/cf-binding-probe.mjs --props)。
  */
 export function filterBindings(
   bindings: unknown[],
@@ -27,7 +32,7 @@ export function filterBindings(
     const t = (b as { type?: string })?.type;
     const name = (b as { name?: string })?.name;
     if (typeof t !== "string") continue;
-    if (t === "secret_text" || t === "inherit") {
+    if (t === "secret_text" || t === "inherit" || t === "service") {
       if (typeof name === "string" && name) out.push({ type: "inherit", name });
       continue;
     }

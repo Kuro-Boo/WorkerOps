@@ -2,8 +2,9 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./types";
 import { loadConfig } from "./config";
 import { handleOps, maintenancePage } from "./ops";
-import { handleRevive, handleTick, runTick } from "./tick";
+import { runTick } from "./tick";
 import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
+import { askedRestart, type AskedRestart } from "./restart";
 import { peerHold, peerRelease, peerStatus, type HoldResult, type PeerStatus } from "./peer";
 
 /**
@@ -38,6 +39,11 @@ export class WorkerOpsAssets extends WorkerEntrypoint<Env> {
   async release(): Promise<void> {
     await peerRelease(this.env);
   }
+
+  /** The app asks to be restarted (an operator's button in its admin screen): the serving version goes out again (restart.ts). */
+  async restart(reason?: string): Promise<AskedRestart> {
+    return askedRestart(this.env, loadConfig(this.env), typeof reason === "string" ? reason : "");
+  }
 }
 
 export default {
@@ -49,16 +55,6 @@ export default {
   ): Promise<Response> {
     const config = loadConfig(env);
     const { pathname } = new URL(request.url);
-
-    // The minute from a hosting account's concierge (tick.ts). Before handleOps: that resolves the
-    // config with a call to the app, which a minute's call should not pay for.
-    if (pathname === config.opsPath + "/api/v1/tick" && request.method === "POST") {
-      return handleTick(env, ctx, config, request);
-    }
-    // The installer asks a guardian to bring a stopped concierge back (concierge-revive.ts). Same token.
-    if (pathname === config.opsPath + "/api/v1/concierge/revive" && request.method === "POST") {
-      return handleRevive(env, config, request);
-    }
 
     if (pathname === config.opsPath || pathname.startsWith(config.opsPath + "/")) {
       return handleOps(request, env, ctx, config);
@@ -81,8 +77,7 @@ export default {
 
   /**
    * Watchdog (finishes any update stuck in `deployed_unverified`), automatic updates (only when the
-   * owner switched them on), and the app's minute when APP_TICK is "1" (tick.ts). Hosting accounts
-   * have no cron here: their concierge calls POST {OPS_PATH}/api/v1/tick instead.
+   * owner switched them on), and the app's minute when APP_TICK is "1" (tick.ts).
    */
   async scheduled(
     event: ScheduledController,

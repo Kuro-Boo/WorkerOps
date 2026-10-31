@@ -2,6 +2,7 @@ import type { Env } from "./types";
 import type { Config } from "./config";
 import { LOCK_KEY, acquireLock, getState, releaseLock, type UpdateStatus } from "./state";
 import { WORKEROPS_VERSION } from "./version";
+import { getRestart, restartEnabled, type RestartRecord } from "./restart";
 
 /**
  * The app updating the guardian (cms-workerops「番人の更新は app が行う」・2026-10-16).
@@ -31,6 +32,10 @@ export interface PeerStatus {
   selfUpdate: false;
   /** The guardian's lock is taken (an operation, or an app's hold). */
   locked: boolean;
+  /** The restart watch (restart.ts): null when APP_RESTART is off. */
+  restart: (RestartRecord & { enabled: true }) | null;
+  autoRevertCount: number;
+  lastAutoRevertAt: string | null;
 }
 
 export type HoldResult = { ok: true } | { ok: false; reason: "update_in_progress" | "busy" };
@@ -40,13 +45,18 @@ export const HOLD_MAX_MS = 10 * 60 * 1000;
 const HOLD_MIN_MS = 60 * 1000;
 
 export async function peerStatus(env: Env, _config: Config): Promise<PeerStatus> {
-  const [state, lock] = await Promise.all([getState(env), env.WORKEROPS_STATE.get(LOCK_KEY)]);
+  const [state, lock, restart] = await Promise.all([
+    getState(env), env.WORKEROPS_STATE.get(LOCK_KEY), restartEnabled(env) ? getRestart(env) : Promise.resolve(null),
+  ]);
   return {
     service: "workerops",
     version: WORKEROPS_VERSION,
     state: state.status,
     selfUpdate: false,
     locked: !!lock,
+    restart: restart ? { ...restart, enabled: true } : null,
+    autoRevertCount: state.autoRevertCount,
+    lastAutoRevertAt: state.lastAutoRevertAt,
   };
 }
 

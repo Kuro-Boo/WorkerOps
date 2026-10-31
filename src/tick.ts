@@ -3,14 +3,10 @@
  * the app's scheduled work. One trigger per install instead of one per Worker (2026-10-22).
  *
  * Cloudflare's free plan allows 5 cron triggers per account. An install used two (the app every minute,
- * the guardian every two minutes), so a free account held two installs. Now:
- *
- *   - the guardian's own cron calls runTick, or
- *   - a caller with TICK_TOKEN calls POST {OPS_PATH}/api/v1/tick (a hosting account's concierge ticks
- *     every guardian it runs, so the account needs a single trigger in all)
- *
- * and the guardian passes the minute on to the app over the service binding it already has
- * (APP_SERVICE.tick(at)), when APP_TICK is "1". The app's method is reached only through that binding —
+ * the guardian every two minutes), so a free account held two installs. Now the guardian's own cron
+ * calls runTick (a hosting account's concierge runs the guardians of its installs itself, and its own
+ * paired guardian ticks the concierge — core-offering 15.3), and the guardian passes the minute on to
+ * the app over the service binding it already has (APP_SERVICE.tick(at)), when APP_TICK is "1". The app's method is reached only through that binding —
  * a public request cannot call it.
  *
  * The guardian's own work keeps its old pace (every other minute) when ticked every minute: the
@@ -20,8 +16,7 @@ import type { Config } from "./config";
 import type { Env } from "./types";
 import { watchdogTick } from "./orchestrator";
 import { autoUpdateTick } from "./release-ops";
-import { constantTimeEqual, jsonResponse } from "./util";
-import { reviveConcierge } from "./concierge-revive";
+import { restartTick } from "./restart";
 
 export type AppTick = "ok" | "off" | "error";
 
@@ -50,6 +45,8 @@ export async function runTick(
   if (guardian) {
     ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
     ctx.waitUntil(autoUpdateTick(env, ctx, config).catch(() => {}));
+    // After the watchdog has had its say about an update (restart.ts leaves updates alone).
+    ctx.waitUntil(restartTick(env, config).catch(() => "off"));
   }
   if (!appTicks(env)) return { guardian, app: "off" };
   try {
@@ -58,29 +55,4 @@ export async function runTick(
   } catch (error) {
     return { guardian, app: "error", error: error instanceof Error ? error.message.slice(0, 200) : "tick failed" };
   }
-}
-
-/** POST {OPS_PATH}/api/v1/tick. Without TICK_TOKEN the endpoint does not exist. */
-export async function tickAuthorized(env: Env, request: Request): Promise<boolean | null> {
-  const expected = env.TICK_TOKEN ?? "";
-  if (expected.length < 32) return null;
-  const m = /^Bearer (.+)$/.exec(request.headers.get("authorization") ?? "");
-  return !!m && constantTimeEqual(m[1]!, expected);
-}
-
-/** The endpoint itself: 404 without TICK_TOKEN, 401 for a wrong token, else the minute's result. */
-export async function handleTick(env: Env, ctx: ExecutionContext, config: Config, request: Request): Promise<Response> {
-  const ok = await tickAuthorized(env, request);
-  if (ok === null) return jsonResponse({ error: "not_found" }, 404);
-  if (!ok) return jsonResponse({ error: "unauthorized" }, 401);
-  return jsonResponse(await runTick(env, ctx, config, Date.now(), { everyMinute: true }));
-}
-
-/** POST {OPS_PATH}/api/v1/concierge/revive — same token as the minute (concierge-revive.ts). */
-export async function handleRevive(env: Env, config: Config, request: Request): Promise<Response> {
-  const ok = await tickAuthorized(env, request);
-  if (ok === null) return jsonResponse({ error: "not_found" }, 404);
-  if (!ok) return jsonResponse({ error: "unauthorized" }, 401);
-  const result = await reviveConcierge(env, config);
-  return jsonResponse(result, result.ok ? 200 : 502);
 }

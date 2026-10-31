@@ -64,12 +64,15 @@ export interface ReleaseInfo {
  * per isolate (the console polls status every few seconds).
  */
 type Declaration = { productId?: string; policy?: { auto?: boolean; channel?: ReleaseChannel }; version?: string };
-let declared: { at: number; value: Declaration } | null = null;
+// Keyed by the app: one isolate can run the guardian of many installs (a hosting account's concierge, core-offering 15.3).
+const declared = new Map<string, { at: number; value: Declaration }>();
 export async function appDeclaration(env: Env, config: Config, fresh = false): Promise<Declaration> {
-  if (!fresh && declared && Date.now() - declared.at < 60_000) return declared.value;
+  const key = `${config.accountId}/${config.appWorkerName}`;
+  const seen = declared.get(key);
+  if (!fresh && seen && Date.now() - seen.at < 60_000) return seen.value;
   const h = await probeHealth(env, config).catch(() => null);
   const value: Declaration = h ? { productId: h.productId, policy: h.policy, version: h.version } : {};
-  if (h && h.status) declared = { at: Date.now(), value };
+  if (h && h.status) declared.set(key, { at: Date.now(), value });
   return value;
 }
 

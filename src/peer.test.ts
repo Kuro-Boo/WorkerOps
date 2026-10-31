@@ -37,6 +37,7 @@ const main = async () => {
     const { env } = fakeEnv();
     eq("status: 自分の版を名乗り、鍵が無ければ locked=false", await peerStatus(env, config), {
       service: "workerops", version: WORKEROPS_VERSION, state: "idle", selfUpdate: false, locked: false,
+      restart: null, autoRevertCount: 0, lastAutoRevertAt: null,
     });
   }
   {

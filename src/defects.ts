@@ -21,11 +21,15 @@ export type DefectCode =
   | "workerops_app_failed_predeploy"
   | "workerops_app_auto_reverted"
   | "workerops_app_manual_required"
+  /** The app stopped answering and a restart did not bring it back (restart.ts). */
+  | "workerops_app_down"
+  /** A record, not a defect: a restart brought the app back. */
+  | "workerops_app_restarted"
   /** A record, not a defect: the app was updated and confirmed. */
   | "workerops_app_updated";
 
 /** Codes that mark something that went right (Defects' `record`), not a fault. */
-const RECORD_CODES: ReadonlySet<DefectCode> = new Set(["workerops_app_updated"]);
+const RECORD_CODES: ReadonlySet<DefectCode> = new Set(["workerops_app_updated", "workerops_app_restarted"]);
 
 export function defectsEnabled(env: Env): boolean {
   return !["off", "0", "false", "no"].includes(

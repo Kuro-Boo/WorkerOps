@@ -21,6 +21,7 @@ const allow = new Set([
   "service",
 ]);
 const f = (b: unknown[]) => filterBindings(b, allow);
+const keepAllOf = (b: unknown[]) => filterBindings(b, null);
 
 // ⚠ 本丸。secret を落とすと POST /versions は「secret の無い版」を作り、
 //   その版が展開された瞬間に app から secret が消える（2026-08-13 の実害）。
@@ -40,12 +41,18 @@ eq(
   "許可された型はそのまま",
   f([
     { type: "d1", name: "DB", id: "x" },
-    { type: "service", name: "APP_SERVICE", service: "app" },
+    { type: "kv_namespace", name: "K", namespace_id: "k" },
   ]),
   [
     { type: "d1", name: "DB", id: "x" },
-    { type: "service", name: "APP_SERVICE", service: "app" },
+    { type: "kv_namespace", name: "K", namespace_id: "k" },
   ],
+);
+// settings は束縛の props を返さない。読んだまま送ると props が消え、委託の app が連絡係に名乗れなくなる。
+eq(
+  "Service Binding は inherit で引き継ぐ(props・entrypoint ごと)",
+  keepAllOf([{ type: "service", name: "WORKEROPS", service: "entamy-concierge", entrypoint: "GuardianEntry" }]),
+  [{ type: "inherit", name: "WORKEROPS" }],
 );
 eq(
   "許可リストを明示したときだけ未知の型を捨てる",

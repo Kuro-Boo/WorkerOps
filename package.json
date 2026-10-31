@@ -1,6 +1,6 @@
 {
   "name": "workerops",
-  "version": "0.1.31",
+  "version": "0.1.32",
   "description": "Generic guardian Worker that fronts a Cloudflare Worker to make self-updates safe and reversible (deploy / health-verify / auto-revert / recovery UI).",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.txt",
@@ -35,7 +35,8 @@
     "test:peer": "esbuild src/peer.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/peer-test.mjs && node .wrangler/peer-test.mjs",
     "test:store": "esbuild src/store-release.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/store-release-test.mjs && node .wrangler/store-release-test.mjs",
     "test:tick": "esbuild src/tick.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/tick-test.mjs && node .wrangler/tick-test.mjs",
-    "test": "npm run test:bindings && npm run test:sql && npm run test:release && npm run test:defects && npm run test:assets && npm run test:peer && npm run test:store && npm run test:tick",
+    "test:restart": "esbuild src/restart.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/restart-test.mjs && node .wrangler/restart-test.mjs",
+    "test": "npm run test:bindings && npm run test:sql && npm run test:release && npm run test:defects && npm run test:assets && npm run test:peer && npm run test:store && npm run test:tick && npm run test:restart",
     "release:bundle": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.js --minify --external:cloudflare:workers",
     "release:publish": "./ops/publish-entamy-release.sh"
   },
