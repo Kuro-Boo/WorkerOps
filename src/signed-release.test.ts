@@ -72,6 +72,39 @@ assert.equal(pointer?.version, "1.2.3");
 const pulled = await fetchDistRelease(pullEnv, config, "1.2.3");
 assert.equal(pulled.manifest.version, "1.2.3");
 assert.ok(pulled.worker.includes("Response('ok')"));
+// A development version: the endpoint answers 404 until the app's token is shown. Stable never asks the app.
+{
+  const seen: Array<string | null> = [];
+  let asked = 0;
+  const gated = {
+    async fetch(url: string, init?: RequestInit): Promise<Response> {
+      const auth = new Headers(init?.headers).get("authorization");
+      seen.push(auth);
+      const path = new URL(url).pathname;
+      if (path.endsWith("/channels/stable.json")) return Response.json({ product_id: "mushmanager", channel: "stable", version: "1.2.3" });
+      if (auth !== "Bearer dev-token") return new Response("{}", { status: 404 });
+      return Response.json({ product_id: "mushmanager", channel: "dev", version: "1.3.0" });
+    },
+  };
+  const app = (token: string | null | Error) => ({
+    releaseToken: async () => {
+      asked += 1;
+      if (token instanceof Error) throw token;
+      return token;
+    },
+  });
+  const base = { RELEASE_PUBKEYS: PUBKEYS, PRODUCT_ID: "mushmanager", UPDATE: gated };
+  const devEnv = { ...base, APP_SERVICE: app("dev-token") } as never;
+  assert.equal((await channelPointer(devEnv, loadConfig(devEnv), "stable"))?.version, "1.2.3");
+  assert.equal(asked, 0, "a stable lookup does not touch the app");
+  assert.equal((await channelPointer(devEnv, loadConfig(devEnv), "dev"))?.version, "1.3.0");
+  assert.equal(asked, 1);
+  for (const answer of [null, new Error("no such method")]) {
+    const other = { ...base, APP_SERVICE: app(answer) } as never;
+    assert.equal(await channelPointer(other, loadConfig(other), "dev"), null, "no token: the channel is simply not there");
+  }
+  console.log("  ok   development channel: the app's token, only after a 404");
+}
 // The signature is checked before any artifact is fetched.
 fetched.length = 0;
 const badEnv = { RELEASE_PUBKEYS: JSON.stringify([{ key_id: "test", pub: Buffer.alloc(32, 1).toString("base64url") }]), PRODUCT_ID: "mushmanager", UPDATE: dist() } as never;

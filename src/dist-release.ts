@@ -23,6 +23,7 @@
  * object at rest).
  */
 import type { Env } from "./types";
+import { withTimeout } from "./util";
 import type { Config, ReleaseChannel } from "./config";
 import { verifyManifest, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
 import { fetchStoreRelease, storePointer } from "./store-release";
@@ -47,11 +48,30 @@ function base(env: Env): string {
  * Prefer a service binding when present (a Worker may not reach another Worker on the same zone over its public URL).
  * A product the endpoint keeps internal (Entamy's own Workers, e.g. Admin) is served only with a caller key
  * allowed for that one product (RELEASE_READ_KEY). Public products ignore it.
+ *
+ * A development version is served only to a developer account's site. The endpoint answers 404 to anyone else,
+ * so on a 404 ask the app for its token (the optional method `releaseToken()`, reached only over the binding) and
+ * look once more. Stable releases never touch the app: a broken app can still be replaced by a stable version.
  */
 async function get(env: Env, path: string): Promise<Response> {
   const url = `${base(env)}${path}`;
-  const init = env.RELEASE_READ_KEY ? { headers: { "x-entamy-internal": env.RELEASE_READ_KEY } } : undefined;
-  return env.UPDATE ? env.UPDATE.fetch(url, init) : fetch(url, init);
+  const send = (init?: RequestInit) => (env.UPDATE ? env.UPDATE.fetch(url, init) : fetch(url, init));
+  const key: Record<string, string> = env.RELEASE_READ_KEY ? { "x-entamy-internal": env.RELEASE_READ_KEY } : {};
+  const first = await send(env.RELEASE_READ_KEY ? { headers: key } : undefined);
+  if (first.status !== 404 || env.RELEASE_READ_KEY) return first;
+  const token = await appToken(env);
+  return token ? send({ headers: { authorization: `Bearer ${token}` } }) : first;
+}
+
+/** The app's token when its owner is a developer account; null when it has none or does not answer. */
+async function appToken(env: Env): Promise<string | null> {
+  try {
+    const app = env.APP_SERVICE as unknown as { releaseToken?(): Promise<string | null> };
+    const token = await withTimeout(Promise.resolve(app.releaseToken?.() ?? null), 10_000);
+    return typeof token === "string" && token ? token : null;
+  } catch {
+    return null;
+  }
 }
 
 export async function channelPointer(env: Env, config: Config, channel: ReleaseChannel = config.releaseChannel): Promise<Pointer | null> {
