@@ -6,6 +6,7 @@ import { runTick } from "./tick";
 import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
 import { askedRestart, type AskedRestart } from "./restart";
 import { peerHold, peerRelease, peerStatus, type HoldResult, type PeerStatus } from "./peer";
+import { LAST_AUTO_CHECK_KEY } from "./release-ops";
 
 /**
  * The app hands its built pages to the guardian here (assets.ts). Reached only
@@ -38,6 +39,17 @@ export class WorkerOpsAssets extends WorkerEntrypoint<Env> {
 
   async release(): Promise<void> {
     await peerRelease(this.env);
+  }
+
+  /**
+   * The app saw a newer version on its channel: check now instead of waiting for the daily gate
+   * (release-ops.ts autoUpdateTick). Only clears the gate — the guardian's own rules still decide
+   * (auto off, a pinned version, a version it reverted). Accounts with a concierge already do this
+   * for every install; this is for a guardian on its own (customer-owned installs).
+   */
+  async recheck(): Promise<{ ok: true }> {
+    await this.env.WORKEROPS_STATE.delete(LAST_AUTO_CHECK_KEY);
+    return { ok: true };
   }
 
   /** The app asks to be restarted (an operator's button in its admin screen): the serving version goes out again (restart.ts). */

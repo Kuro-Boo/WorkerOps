@@ -1,5 +1,5 @@
 // 契約テスト(`npm run test:screen`)。番人の画面と状態を見せるかは Secret OPS_SCREEN で決める。
-// 既定は隠す(自社の基盤・Billing・Payout の番人は Entamy 管理画面で操る)。顧客導入は導入口が on を置く。
+// 既定は隠す(自社の基盤・Billing・Payout の番人は Entamy 管理画面で操る)。顧客運用は導入口が on を置く。
 import { handleOps, maintenancePage } from "./ops";
 import { loadConfig } from "./config";
 import type { Env } from "./types";
