@@ -31,7 +31,7 @@ CF_ACCOUNT_ID = "replace-with-account-id"
 #   未設定なら自己更新は無効。自分の名前を知らない guardian に自分を書き換え
 #   させないための、意図的に安全側の既定（壊れた版に入れ替わると復旧コンソール
 #   ごと失われ、内側から戻す手段が無くなる）。
-# SELF_RELEASE_SOURCE = "Kuro-Boo/WorkerOps"   # 既定
+#   版は配布基盤(update)の workerops から取る(GitHub は読まない)。
 # SELF_UPDATE_INTERVAL_MS = "10800000"          # 既定 3h（±10% のジッター付き）
 # SELF_UPDATE = "0"                             # 明示的に自己更新を止める
 # DEFECTS = "off"                              # 失敗の知らせ(Entamy Defects)を止める

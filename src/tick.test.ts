@@ -47,6 +47,22 @@ const main = async () => {
     const { env } = fakeEnv({ APP_TICK: "1" }, { tick: async () => { throw new Error("The RPC receiver does not implement the method \"tick\""); } });
     eq("受け口の無い古い app は error で返す(投げない)", (await runTick(env, ctx, config, 0, { everyMinute: true })).app, "error");
   }
+  {
+    // 2026-11-08: 回の打ち切りを app に知らせる(KuroCMS の planAutoPass)。
+    const opts: unknown[] = [];
+    const cuts: number[] = [];
+    const env = fakeEnv({ APP_TICK: "1" }).env as unknown as { APP_SERVICE: Record<string, unknown> };
+    env.APP_SERVICE.tick = async (_at: number, o: unknown) => void opts.push(o);
+    env.APP_SERVICE.tickCut = async (at: number) => void cuts.push(at);
+    await runTick(env as unknown as Env, ctx, config, 60_000, { everyMinute: true });
+    eq("知らせることを app に伝える", opts, [{ reportsCut: true }]);
+    eq("済んだ分は知らせない", cuts, []);
+    env.APP_SERVICE.tick = async () => { throw new Error("Worker exceeded CPU time limit."); };
+    eq("打ち切られた分は error で返す", (await runTick(env as unknown as Env, ctx, config, 120_000, { everyMinute: true })).app, "error");
+    eq("打ち切られた分を tickCut で知らせる", cuts, [120_000]);
+    env.APP_SERVICE.tickCut = async () => { throw new Error("The RPC receiver does not implement the method \"tickCut\""); };
+    eq("tickCut の無い app でも投げない", (await runTick(env as unknown as Env, ctx, config, 180_000, { everyMinute: true })).app, "error");
+  }
 
 
   if (failed) {

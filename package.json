@@ -1,6 +1,6 @@
 {
   "name": "workerops",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "description": "Generic guardian Worker that fronts a Cloudflare Worker to make self-updates safe and reversible (deploy / health-verify / auto-revert / recovery UI).",
   "type": "module",
   "license": "SEE LICENSE IN LICENSE.txt",
@@ -29,6 +29,7 @@
     "typecheck": "tsc --noEmit",
     "test:bindings": "node src/bindings.test.ts",
     "test:sql": "node src/sql.test.ts",
+    "test:trial": "esbuild src/trial.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/trial-test.mjs && node .wrangler/trial-test.mjs",
     "test:release": "esbuild src/signed-release.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/signed-release-test.mjs && node .wrangler/signed-release-test.mjs",
     "test:defects": "esbuild src/defects.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/defects-test.mjs && node .wrangler/defects-test.mjs",
     "test:assets": "esbuild src/assets.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/assets-test.mjs && node .wrangler/assets-test.mjs",
@@ -37,7 +38,7 @@
     "test:tick": "esbuild src/tick.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/tick-test.mjs && node .wrangler/tick-test.mjs",
     "test:restart": "esbuild src/restart.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/restart-test.mjs && node .wrangler/restart-test.mjs",
     "test:screen": "esbuild src/screen.test.ts --bundle --platform=node --format=esm --outfile=.wrangler/screen-test.mjs --external:cloudflare:workers && node .wrangler/screen-test.mjs",
-    "test": "npm run test:bindings && npm run test:sql && npm run test:release && npm run test:defects && npm run test:assets && npm run test:peer && npm run test:store && npm run test:tick && npm run test:restart && npm run test:screen",
+    "test": "npm run test:bindings && npm run test:sql && npm run test:release && npm run test:defects && npm run test:assets && npm run test:peer && npm run test:store && npm run test:tick && npm run test:restart && npm run test:screen && npm run test:trial",
     "release:bundle": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/worker.js --minify --external:cloudflare:workers",
     "release:publish": "./ops/publish-entamy-release.sh"
   },

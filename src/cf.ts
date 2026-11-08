@@ -256,9 +256,14 @@ export class CfClient {
 
   /** Deploy a version to 100% (used for both activate and rollback). */
   async deployVersion(versionId: string, message: string): Promise<void> {
+    return this.deployVersions([{ percentage: 100, version_id: versionId }], message);
+  }
+
+  /** 割合を並べた配備(確かめてから配る段の 100% と 0%・trial.ts)。割合の合計は 100。 */
+  async deployVersions(versions: Array<{ version_id: string; percentage: number }>, message: string): Promise<void> {
     const body = {
       strategy: "percentage",
-      versions: [{ percentage: 100, version_id: versionId }],
+      versions,
       // Only "workers/message" is a user-settable annotation; "workers/triggered_by"
       // is rejected by the API (error 10210) — CF sets it internally.
       annotations: {

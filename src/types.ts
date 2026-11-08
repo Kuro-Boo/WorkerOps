@@ -98,4 +98,9 @@ export interface Env {
   UPDATE_LOCK_TTL_MS?: string;
   /** Comma list of CF binding types to re-submit when redeploying the app. */
   BINDING_TYPES?: string;
+  /**
+   * "1": put a new version at 0% next to the serving one, check it with a version override, and only then send
+   * it 100% (trial.ts). Never set for an app with Durable Objects. Entamy's platform concierge sets it.
+   */
+  TRIAL_BEFORE_DEPLOY?: string;
 }

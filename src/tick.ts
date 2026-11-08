@@ -49,10 +49,27 @@ export async function runTick(
     ctx.waitUntil(restartTick(env, config).catch(() => "off"));
   }
   if (!appTicks(env)) return { guardian, app: "off" };
+  const app = env.APP_SERVICE as unknown as AppMinute;
   try {
-    await (env.APP_SERVICE as unknown as { tick(at: number): Promise<void> }).tick(at);
+    await app.tick(at, { reportsCut: true });
     return { guardian, app: "ok" };
   } catch (error) {
+    // The app's minute did not finish (cut at the CPU limit, or failed). Say so, so the app knows its
+    // pass is over rather than still running: it starts the next pass only then (KuroCMS planAutoPass,
+    // 2026-11-08). An app without tickCut answers with an error; that is fine.
+    await Promise.resolve()
+      .then(() => app.tickCut(at))
+      .catch(() => {});
     return { guardian, app: "error", error: error instanceof Error ? error.message.slice(0, 200) : "tick failed" };
   }
+}
+
+/**
+ * The app's minute over the service binding. `reportsCut` promises that a failed tick(at) is followed by
+ * tickCut(at): the app may then treat its pass as running until it ends or is reported cut, instead of
+ * guessing from the next minute.
+ */
+interface AppMinute {
+  tick(at: number, opts: { reportsCut: boolean }): Promise<void>;
+  tickCut(at: number): Promise<void>;
 }

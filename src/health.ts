@@ -19,11 +19,12 @@ const PRODUCT_RE = /^[a-z][a-z0-9_-]{0,63}$/;
 const APP_ORIGIN = "https://app.internal";
 
 /** Probe the app's WorkerOps Contract health endpoint via the service binding. */
-export async function probeHealth(env: Env, config: Config): Promise<HealthResult> {
+export async function probeHealth(env: Env, config: Config, extraHeaders: Record<string, string> = {}): Promise<HealthResult> {
   try {
     const req = new Request(APP_ORIGIN + config.healthPath, {
       method: "GET",
-      headers: { accept: "application/json" },
+      // extraHeaders: 確かめてから配る段の版の指定(trial.ts)。
+      headers: { accept: "application/json", ...extraHeaders },
     });
     const res = await withTimeout(env.APP_SERVICE.fetch(req), 5000);
     // Parse the body even on non-2xx: a broken NEW version may still report its

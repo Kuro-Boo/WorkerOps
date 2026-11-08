@@ -29,6 +29,8 @@ export interface Config {
   healthIntervalMs: number;
   lockTtlMs: number;
   bindingTypes: Set<string> | null;
+  /** TRIAL_BEFORE_DEPLOY=1: 上げた版を 0% で載せて確かめてから 100% にする(trial.ts)。 */
+  trialBeforeDeploy: boolean;
 }
 
 function int(value: string | undefined, fallback: number): number {
@@ -66,6 +68,7 @@ export function loadConfig(env: Env): Config {
     healthWindowMs: int(env.HEALTH_WINDOW_MS, 45000),
     healthIntervalMs: int(env.HEALTH_INTERVAL_MS, 2000),
     lockTtlMs: int(env.UPDATE_LOCK_TTL_MS, 120000),
+    trialBeforeDeploy: (env.TRIAL_BEFORE_DEPLOY ?? "").trim() === "1",
     // ⚠ 未設定なら null＝【型で絞らない】。既定を許可リストにしていたため、
     //   そこに無い型 (images など) が更新のたびに消えていた。明示された場合だけ
     //   従来どおり許可リストとして働く。

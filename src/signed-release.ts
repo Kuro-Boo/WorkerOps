@@ -13,6 +13,7 @@ import { keepGoodCode, restoreVersion } from "./assets";
 import type { Config } from "./config";
 import { probeHealth, runMigrate } from "./health";
 import { addColumnTarget, createIndexName, splitSql } from "./sql";
+import { trialVersion } from "./trial";
 import {
   acquireLock,
   appendEvent,
@@ -304,6 +305,26 @@ export async function deploySignedRelease(
     const bindings = applyVars(filterBindings(settings.bindings, config.bindingTypes), release.vars);
     const versionId = await client.uploadVersion(release.worker, bindings, settings.compatibility_date, settings.compatibility_flags);
     await setState(env, { toVersionId: versionId });
+    if (config.trialBeforeDeploy) {
+      // 確かめてから配る(trial.ts)。だめなら本番は今の版のまま。この版は二度と自分から入れない。
+      if (!fromVersion) throw new Error("trial: no serving version to keep");
+      const trial = await trialVersion({
+        deploy: (versions, message) => client.deployVersions(versions, message),
+        probe: (headers) => probeHealth(env, config, headers),
+        sleep, now: Date.now,
+      }, {
+        worker: config.appWorkerName, from: fromVersion, to: versionId, expectedVersion: release.manifest.version, previousVersion: previousHealthVersion,
+        windowMs: config.healthWindowMs, intervalMs: config.healthIntervalMs, label: release.manifest.version,
+      });
+      if (!trial.ok) {
+        await env.WORKEROPS_STATE.put(failedKey(release.manifest.version), JSON.stringify({ at: nowIso(), error: trial.error }));
+        await appendEvent(env, "trial", "fail", trial.error);
+        await setState(env, { status: "failed_predeploy", finishedAt: nowIso(), error: trial.error });
+        await releaseLock(env);
+        return response({ error: "trial_failed", detail: trial.error }, 502);
+      }
+      await appendEvent(env, "trial", "ok", `${release.manifest.version} answered at 0%`);
+    }
     await client.deployVersion(versionId, `WorkerOps signed release ${release.manifest.version}`);
     await setState(env, { status: "deployed_unverified", deployedAt: nowIso() });
 
