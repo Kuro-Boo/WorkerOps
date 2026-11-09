@@ -8,7 +8,7 @@
  * の3つだけを行う。外から版を送り込まれる口は持たない —— 版を上げるかどうかは持ち主が決める。
  */
 import { applyVars, filterBindings } from "./bindings";
-import { CfClient } from "./cf";
+import { CfClient, type VersionAssets } from "./cf";
 import { keepGoodCode, restoreVersion } from "./assets";
 import type { Config } from "./config";
 import { probeHealth, runMigrate } from "./health";
@@ -126,6 +126,64 @@ export interface SignedRelease {
   migrations: Array<{ name: string; sql: string }>;
   /** 版が運ぶ設定の値(`role: "vars"`・wrangler.toml の [vars])。運ばない版は null。 */
   vars?: Record<string, string> | null;
+  /** 版が運ぶ Worker の静的資産(`role: "static_assets"`・wrangler の [assets])。運ばない版は null(今の資産を残す)。 */
+  staticAssets?: StaticAssets | null;
+}
+
+export interface StaticAssets {
+  config: Record<string, unknown>;
+  files: Array<{ path: string; type: string; base64: string }>;
+}
+
+/** 版から受け取る資産の配り方。ほかの鍵は渡さない(Cloudflare の assets.config に載る鍵だけ)。 */
+const STATIC_CONFIG_KEYS = ["run_worker_first", "html_handling", "not_found_handling"];
+const STATIC_PATH = /^\/[A-Za-z0-9._\-/]{1,255}$/;
+
+function parseStaticAssets(data: Uint8Array): StaticAssets {
+  let parsed: unknown;
+  try { parsed = JSON.parse(new TextDecoder().decode(data)); }
+  catch { throw new Error("release static assets are invalid"); }
+  const raw = parsed as { config?: unknown; files?: unknown };
+  if (!raw || typeof raw.files !== "object" || raw.files === null || Array.isArray(raw.files)) throw new Error("release static assets are invalid");
+  const files: StaticAssets["files"] = [];
+  for (const [path, f] of Object.entries(raw.files as Record<string, unknown>)) {
+    const file = f as { type?: unknown; base64?: unknown };
+    if (!STATIC_PATH.test(path) || path.includes("..") || typeof file?.type !== "string" || typeof file.base64 !== "string") {
+      throw new Error("release static assets are invalid");
+    }
+    files.push({ path, type: file.type, base64: file.base64 });
+  }
+  if (!files.length) throw new Error("release static assets are invalid");
+  const config: Record<string, unknown> = {};
+  const given = raw.config && typeof raw.config === "object" ? raw.config as Record<string, unknown> : {};
+  for (const k of STATIC_CONFIG_KEYS) if (k in given) config[k] = given[k];
+  return { config, files };
+}
+
+/**
+ * 版の静的資産を上げ、版に付ける鍵を返す(assets.ts の publishAssets と同じ手順: 目録 → 求められた分だけ送る)。
+ * 指紋は中身と種類から作る(Cloudflare は比べるだけ・32 桁)。
+ */
+export async function uploadStaticAssets(client: CfClient, sa: StaticAssets): Promise<VersionAssets> {
+  const byHash = new Map<string, { base64: string; type: string }>();
+  const manifest: Record<string, { hash: string; size: number }> = {};
+  for (const f of sa.files) {
+    const bytesOf = Uint8Array.from(atob(f.base64), (c) => c.charCodeAt(0));
+    const hash = (await digest(new Uint8Array([...new TextEncoder().encode(`${f.type}\n`), ...bytesOf]))).slice(0, 32);
+    manifest[f.path] = { hash, size: bytesOf.byteLength };
+    byHash.set(hash, { base64: f.base64, type: f.type });
+  }
+  const session = await client.assetsUploadSession(manifest);
+  let completion = session.jwt;
+  for (const bucket of session.buckets) {
+    const done = await client.uploadAssetBucket(session.jwt, bucket.map((h) => {
+      const f = byHash.get(h);
+      if (!f) throw new Error("static asset asked for is not in the release");
+      return { hash: h, base64: f.base64, type: f.type };
+    }));
+    if (done) completion = done;
+  }
+  return { jwt: completion, config: sa.config };
 }
 
 const VAR_NAME = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -209,7 +267,9 @@ export function verifyArtifactsSync(manifest: Manifest, files: Map<string, Uint8
   }
   const varsArtifact = manifest.artifacts.find((item) => item.role === "vars");
   const vars = varsArtifact ? parseVars(files.get(varsArtifact.name)!) : null;
-  return { manifest, worker: new TextDecoder().decode(workerBytes), migrations, vars };
+  const staticArtifact = manifest.artifacts.find((item) => item.role === "static_assets");
+  const staticAssets = staticArtifact ? parseStaticAssets(files.get(staticArtifact.name)!) : null;
+  return { manifest, worker: new TextDecoder().decode(workerBytes), migrations, vars, staticAssets };
 }
 
 export async function verifyArtifacts(manifest: Manifest, files: Map<string, Uint8Array>): Promise<SignedRelease> {
@@ -303,7 +363,10 @@ export async function deploySignedRelease(
     const settings = await client.getSettings();
     // 版が運ぶ設定の値を重ねる(版に無い値は残す・bindings.ts の applyVars)。
     const bindings = applyVars(filterBindings(settings.bindings, config.bindingTypes), release.vars);
-    const versionId = await client.uploadVersion(release.worker, bindings, settings.compatibility_date, settings.compatibility_flags);
+    // 版が資産を運ぶなら、その資産を版に付ける(運ばない版は今の資産を残す)。
+    const assets = release.staticAssets ? await uploadStaticAssets(client, release.staticAssets) : undefined;
+    if (release.staticAssets) await appendEvent(env, "static_assets", "ok", `${release.staticAssets.files.length} files`);
+    const versionId = await client.uploadVersion(release.worker, bindings, settings.compatibility_date, settings.compatibility_flags, assets);
     await setState(env, { toVersionId: versionId });
     if (config.trialBeforeDeploy) {
       // 確かめてから配る(trial.ts)。だめなら本番は今の版のまま。この版は二度と自分から入れない。

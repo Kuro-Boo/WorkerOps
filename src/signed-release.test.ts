@@ -202,3 +202,40 @@ await assert.rejects(() => setAuto(legacyEnv, legacy, true), /admin screen/);
 // With no RELEASE_PUBKEYS, the bundled keys of the default endpoint are used: our test key is not among them.
 await assert.rejects(() => fetchDistRelease(legacyEnv, legacy, "1.2.3"), /not trusted/);
 console.log("  ok   product and update choices declared by the app");
+
+// ── static assets carried by the release (role static_assets・2026-11-09) ─────
+{
+  const { uploadStaticAssets } = await import("./signed-release.ts");
+  const stat = Buffer.from(JSON.stringify({
+    config: { run_worker_first: true, directory: "./public", binding: "ASSETS" },
+    files: { "/installer/contract.js": { type: "application/javascript", base64: Buffer.from("console.log(1)").toString("base64") } },
+  }));
+  const withStatic = { ...manifest, artifacts: [...manifest.artifacts, { name: "static-assets.json", role: "static_assets", sha256: sha(stat), size: stat.byteLength }] };
+  const r = await verifyArtifacts(withStatic as never, new Map([
+    ["worker.js", new Uint8Array(worker)], ["migrations.json", new Uint8Array(migrations)], ["static-assets.json", new Uint8Array(stat)],
+  ]));
+  assert.equal(r.staticAssets?.files[0]?.path, "/installer/contract.js");
+  // wrangler の側の鍵(directory・binding)は Cloudflare の assets.config に渡さない。
+  assert.deepEqual(r.staticAssets?.config, { run_worker_first: true });
+  assert.equal(verified.staticAssets, null, "資産を運ばない版は null(今の資産を残す)");
+
+  const bad = Buffer.from(JSON.stringify({ files: { "../x": { type: "text/plain", base64: "" } } }));
+  const withBad = { ...manifest, artifacts: [...manifest.artifacts, { name: "static-assets.json", role: "static_assets", sha256: sha(bad), size: bad.byteLength }] };
+  await assert.rejects(() => verifyArtifacts(withBad as never, new Map([
+    ["worker.js", new Uint8Array(worker)], ["migrations.json", new Uint8Array(migrations)], ["static-assets.json", new Uint8Array(bad)],
+  ])), /static assets are invalid/);
+
+  // 求められた分だけ送り、完了の鍵と配り方を版に付ける。
+  const sent: string[][] = [];
+  let session: Record<string, { hash: string; size: number }> = {};
+  const client = {
+    assetsUploadSession: async (m: Record<string, { hash: string; size: number }>) => { session = m; return { jwt: "session", buckets: [[m["/installer/contract.js"]!.hash]] }; },
+    uploadAssetBucket: async (_jwt: string, files: Array<{ hash: string }>) => { sent.push(files.map((f) => f.hash)); return "done"; },
+  };
+  const up = await uploadStaticAssets(client as never, r.staticAssets!);
+  assert.deepEqual(up, { jwt: "done", config: { run_worker_first: true } });
+  assert.equal(session["/installer/contract.js"]!.size, "console.log(1)".length);
+  assert.match(session["/installer/contract.js"]!.hash, /^[0-9a-f]{32}$/);
+  assert.deepEqual(sent, [[session["/installer/contract.js"]!.hash]]);
+  console.log("  ok   static assets carried by the release");
+}
