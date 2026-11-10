@@ -16,8 +16,9 @@ import { CfClient, parseCode } from "./cf";
 import { acquireLock, appendEvent, getState, releaseLock, setState } from "./state";
 import { filterBindings } from "./bindings";
 import { keepGoodCode, servingCode } from "./assets";
+import { appD1Location } from "./placement-map";
 
-export const PLACEMENT_KEY = "workerops:placement:checked";
+export const PLACEMENT_KEY = "workerops:placement:checked2";
 const CHECK_EVERY_S = 24 * 60 * 60;
 const RETRY_AFTER_S = 60 * 60;
 
@@ -30,7 +31,7 @@ export type PlacementClient = Pick<CfClient, "getSettings" | "currentPlacement" 
 const defaultClient = (config: Config): PlacementClient => {
   const cf = new CfClient(config.token, config.accountId, config.appWorkerName, { max: config.retryMax, baseMs: config.retryBaseMs });
   return {
-    getSettings: (region) => cf.getSettings(region),
+    getSettings: (region, appD1) => cf.getSettings(region, appD1),
     currentPlacement: (mode) => cf.currentPlacement(mode),
     uploadModules: (...args) => cf.uploadModules(...args),
     deployVersion: (id, message) => cf.deployVersion(id, message),
@@ -54,7 +55,7 @@ export async function placementTick(
     const st = await getState(env);
     if (updating(st.status)) return "busy";
     const cf = client(config);
-    const settings = await cf.getSettings();
+    const settings = await cf.getSettings(undefined, () => appD1Location(env));
     if (!settings.fromD1 || !settings.placement) {
       await checked(CHECK_EVERY_S);
       return "no_d1";

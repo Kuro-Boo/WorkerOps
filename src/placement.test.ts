@@ -99,14 +99,14 @@ const main = async () => {
   }
 
   // ── 版の配備の地域の決め方(cf.ts) ──
-  const settingsOf = async (bindings: unknown[], d1: () => Response, region?: unknown) => {
+  const settingsOf = async (bindings: unknown[], d1: () => Response, region?: unknown, appD1?: () => Promise<{ served_by_colo?: string }>) => {
     const urls: string[] = [];
     globalThis.fetch = (async (u: unknown) => {
       urls.push(String(u));
       if (String(u).endsWith("/settings")) return new Response(JSON.stringify({ success: true, result: { bindings } }));
       return d1();
     }) as typeof fetch;
-    const got = await new CfClient("t", "a", "app", { max: 1, baseMs: 1 }).getSettings(region);
+    const got = await new CfClient("t", "a", "app", { max: 1, baseMs: 1 }).getSettings(region, appD1);
     return [got.placement, got.fromD1];
   };
   const db = [{ type: "d1", name: "DB", id: "db1" }];
@@ -114,6 +114,9 @@ const main = async () => {
   eq("D1 の近くが版の名指しに勝つ", await settingsOf(db, sin, "aws:ap-northeast-1"), [{ region: "aws:ap-southeast-1" }, true]);
   eq("D1 が読めなければ版の名指し", await settingsOf(db, () => new Response("x", { status: 403 }), "aws:ap-northeast-1"), [TOKYO, false]);
   eq("D1 を持たなければ版の名指し", await settingsOf([], sin, "aws:ap-northeast-1"), [TOKYO, false]);
+
+  eq("番人の束縛で D1 が読めれば API を使わない", await settingsOf(db, () => new Response("x", { status: 403 }), undefined, async () => ({ served_by_colo: "SIN" })), [{ region: "aws:ap-southeast-1" }, true]);
+  eq("束縛で分からなければ API で読む", await settingsOf(db, sin, undefined, async () => ({})), [{ region: "aws:ap-southeast-1" }, true]);
 
   if (failed) {
     console.log(`\n${failed} failed`);

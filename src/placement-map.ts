@@ -36,3 +36,18 @@ const BY_REGION: Record<string, string> = {
 export function placementOfD1(colo: string | undefined, region: string | undefined): string | undefined {
   return (colo && BY_COLO[colo.toUpperCase()]) || (region && BY_REGION[region.toUpperCase()]) || undefined;
 }
+
+export interface D1Location { served_by_colo?: string; served_by_region?: string; served_by_primary?: boolean }
+
+/**
+ * Where the app's D1 answers from, over the guardian's own binding to it (APP_DB). Needs no Cloudflare
+ * API permission: the guardians of the isolated accounts hold no D1 permission in their tokens.
+ */
+export async function appD1Location(env: { APP_DB?: D1Database }): Promise<D1Location | undefined> {
+  if (!env.APP_DB) return undefined;
+  try {
+    return ((await env.APP_DB.prepare("SELECT 1").all()) as { meta?: D1Location }).meta;
+  } catch {
+    return undefined;
+  }
+}

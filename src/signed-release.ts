@@ -7,6 +7,7 @@
  *   ③ 移行を当て、新しい版を配り、health が新しい版で応答するのを待って確定する。だめなら前の版へ戻す
  * の3つだけを行う。外から版を送り込まれる口は持たない —— 版を上げるかどうかは持ち主が決める。
  */
+import { appD1Location } from "./placement-map";
 import { applyVars, filterBindings } from "./bindings";
 import { CfClient, type VersionAssets } from "./cf";
 import { keepGoodCode, restoreVersion } from "./assets";
@@ -416,7 +417,7 @@ export async function deploySignedRelease(
       await appendEvent(env, "migrate", "ok");
     }
     // 地域は版ごとの設定で、渡さないと外れる。版が名指ししていればそれ、無ければ今の地域を引き継ぐ(cf.ts)。
-    const settings = await client.getSettings(release.manifest.placement_region);
+    const settings = await client.getSettings(release.manifest.placement_region, () => appD1Location(env));
     // 版が運ぶ設定の値を重ねる(版に無い値は残す・bindings.ts の applyVars)。
     const bindings = applyVars(filterBindings(settings.bindings, config.bindingTypes), release.vars);
     // 版が資産を運ぶなら、その資産を版に付ける(運ばない版は今の資産を残す)。

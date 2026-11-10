@@ -1,5 +1,5 @@
 import { fetchRetry, type RetryOptions } from "./retry";
-import { placementOfD1 } from "./placement-map";
+import { placementOfD1, type D1Location } from "./placement-map";
 
 const CF_BASE = "https://api.cloudflare.com/client/v4";
 
@@ -24,6 +24,9 @@ export interface VersionAssets {
  */
 export type Placement = { region: string } | { mode: "smart" };
 const PLACEMENT_REGION = /^(aws|gcp|azure):[a-z0-9-]{2,40}$/;
+
+const regionOf = (m: D1Location | undefined) =>
+  placementOfD1(m?.served_by_primary === false ? undefined : m?.served_by_colo, m?.served_by_region);
 
 /** A Worker's modules, the first-class shape a version is uploaded from. */
 export interface WorkerCode {
@@ -97,7 +100,7 @@ export class CfClient {
    * A Worker runs next to its D1 when the D1 can be located (2026-11-11, the owner's decision); else in
    * `region` (the signed release's placement_region); else where it runs now.
    */
-  async getSettings(region?: unknown): Promise<{
+  async getSettings(region?: unknown, appD1?: () => Promise<D1Location | undefined>): Promise<{
     bindings: unknown[];
     compatibility_date: string;
     compatibility_flags: string[];
@@ -118,7 +121,7 @@ export class CfClient {
       compatibility_flags?: string[];
       placement?: { mode?: string } | null;
     }>(res, "getSettings");
-    const nextToD1 = await this.placementNextToD1(r.bindings ?? []);
+    const nextToD1 = await this.placementNextToD1(r.bindings ?? [], appD1);
     const placement = nextToD1 ?? (typeof region === "string" && PLACEMENT_REGION.test(region)
       ? { region }
       : await this.currentPlacement(r.placement?.mode));
@@ -136,7 +139,9 @@ export class CfClient {
    * The region next to the app's D1 primary: D1 answers which location served a query. Best effort: a
    * token without D1 access, or a D1 that does not answer, must not stop an update or a revert.
    */
-  private async placementNextToD1(bindings: unknown[]): Promise<Placement | undefined> {
+  private async placementNextToD1(bindings: unknown[], appD1?: () => Promise<D1Location | undefined>): Promise<Placement | undefined> {
+    const located = regionOf(await appD1?.());
+    if (located) return { region: located };
     const d1s = bindings.filter((b) => (b as { type?: string })?.type === "d1") as Array<{ name?: string; id?: string; database_id?: string }>;
     const d1 = d1s.find((b) => b.name === "DB") ?? d1s[0];
     const id = d1?.id ?? d1?.database_id;
@@ -147,9 +152,8 @@ export class CfClient {
         headers: { ...this.auth(), "content-type": "application/json" },
         body: JSON.stringify({ sql: "SELECT 1" }),
       }, this.retry);
-      const r = await this.parse<Array<{ meta?: { served_by_colo?: string; served_by_region?: string; served_by_primary?: boolean } }>>(res, "d1Location");
-      const meta = r[0]?.meta;
-      const region = placementOfD1(meta?.served_by_primary === false ? undefined : meta?.served_by_colo, meta?.served_by_region);
+      const r = await this.parse<Array<{ meta?: D1Location }>>(res, "d1Location");
+      const region = regionOf(r[0]?.meta);
       return region ? { region } : undefined;
     } catch (e) {
       console.warn("placement: could not locate the D1", this.scriptName, e);
