@@ -1,6 +1,8 @@
 // 契約テスト(`npm run test:screen`)。番人の画面と状態を見せるかは Secret OPS_SCREEN で決める。
 // 既定は隠す(自社の基盤・Billing・Payout の番人は Entamy 管理画面で操る)。顧客運用は導入口が on を置く。
 import { handleOps, maintenancePage } from "./ops";
+import { forApp, OVERRIDE_HEADER } from "./trial";
+import { sameSecret } from "./util";
 import { loadConfig } from "./config";
 import type { Env } from "./types";
 
@@ -39,6 +41,64 @@ for (const screen of [undefined, "", "off", "1"]) {
   eq("OPS_SCREEN=on: 操作は鍵が要る", (await get(env, "/api/v1/auth-check")).status, 401);
   eq("OPS_SCREEN=on: 保守の頁に画面への道", maintenancePage(loadConfig(env)).includes("__workerops__"), true);
 }
+
+// 断る要求は app に届かせない(課題 91093b53)。PRODUCT_ID の無い番人は app の health で製品を知るが、門が先。
+{
+  let asked = 0;
+  const env = { ...envOf(undefined), APP_SERVICE: { fetch: async () => { asked++; return Response.json({ ok: true }); } } } as unknown as Env;
+  await get(env, "/");
+  await get(env, "/api/v1/status", "wrong");
+  eq("門で断る要求は app を叩かない", asked, 0);
+  await get(env, "/api/v1/auth-check", TOKEN);
+  eq("鍵のある要求は app に訊いてよい", asked > 0, true);
+}
+// 守りのヘッダ(課題 46cdf7b7)。
+{
+  const env = envOf("on");
+  const page = await get(env, "/");
+  const csp = page.headers.get("content-security-policy") ?? "";
+  eq("画面: よその枠に入らない", csp.includes("frame-ancestors 'none'") && page.headers.get("x-frame-options") === "DENY", true);
+  eq("画面: 外へ送れない", csp.includes("default-src 'none'") && csp.includes("connect-src 'self'"), true);
+  eq("画面: 控えに残さない", page.headers.get("cache-control"), "no-store");
+  const json = await get(env, "/api/v1/health");
+  eq("JSON: 控えに残さない・種類を当てさせない", [json.headers.get("cache-control"), json.headers.get("x-content-type-options")], ["no-store", "nosniff"]);
+  eq("画面の esc は引用符も逃がす", (await page.text()).includes("'\"':'&quot;'"), true);
+}
+// 版の指定は公開の要求から外す(課題 79262681)。
+{
+  const plain = new Request("https://x/a");
+  eq("ヘッダが無ければ要求はそのまま", forApp(plain) === plain, true);
+  const picked = forApp(new Request("https://x/a", { method: "POST", body: "b", headers: { [OVERRIDE_HEADER]: 'app="v"', "x-keep": "1" } }));
+  eq("版の指定を外す", picked.headers.has(OVERRIDE_HEADER), false);
+  eq("ほかのヘッダと本文は残す", [picked.headers.get("x-keep"), picked.method, await picked.text()], ["1", "POST", "b"]);
+}
+// 配布の版の口は鍵が要る(課題 3f48bfd1)。
+eq("OPS_SCREEN=on: release は鍵が要る", (await get({ ...envOf("on"), PRODUCT_ID: "p" } as unknown as Env, "/api/v1/release")).status, 401);
+// 公開の状態は失敗の文を出さない(課題 209e2163)。
+{
+  const stored = JSON.stringify({
+    status: "manual_required", error: "getSettings: HTTP 403 secret words", lastAutoRevertReason: "why", intendedRelease: "1.2.3",
+    events: [{ at: "t", step: "migrate", state: "fail", detail: "migration 0001.sql failed: no such table: users" }],
+  });
+  const kv: Record<string, string> = {
+    "workerops:state": stored,
+    "workerops:assets": JSON.stringify({ status: "failed", at: "t", files: 1, uploaded: 0, versionId: null, error: "asset words" }),
+  };
+  const env = {
+    ...envOf("on"), PRODUCT_ID: "p",
+    WORKEROPS_STATE: { get: async (k: string) => kv[k] ?? null },
+    APP_SERVICE: { fetch: async () => Response.json({ ok: true, version: "1.2.2" }) },
+  } as unknown as Env;
+  const open = await get(env, "/api/v1/status");
+  const text = await open.text();
+  const body = JSON.parse(text) as { detail: string; state: { status: string; intendedRelease: string; events: Array<Record<string, unknown>> } };
+  eq("公開の状態: 文は出ない", ["secret words", "no such table", "asset words", "why"].filter((w) => text.includes(w)), []);
+  eq("公開の状態: 状態・版・段と成否は出る", [body.detail, body.state.status, body.state.intendedRelease, body.state.events], ["token_required", "manual_required", "1.2.3", [{ at: "t", step: "migrate", state: "fail" }]]);
+}
+// 鍵の比較(課題 c8ec022f)。
+eq("同じ鍵", await sameSecret(TOKEN, TOKEN), true);
+eq("長さの違う鍵", await sameSecret(TOKEN + "x", TOKEN), false);
+eq("同じ長さの違う鍵", await sameSecret(TOKEN.slice(0, -1) + "y", TOKEN), false);
 
 if (failed) {
   console.log(`\n${failed} failed`);

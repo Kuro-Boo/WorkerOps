@@ -1,12 +1,13 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "./types";
 import { loadConfig } from "./config";
-import { handleOps, maintenancePage } from "./ops";
+import { handleOps, maintenancePage, PAGE_HEADERS } from "./ops";
 import { runTick } from "./tick";
 import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
 import { askedRestart, type AskedRestart } from "./restart";
 import { peerHold, peerRelease, peerStatus, type HoldResult, type PeerStatus } from "./peer";
 import { LAST_AUTO_CHECK_KEY } from "./release-ops";
+import { forApp } from "./trial";
 
 /**
  * The app hands its built pages to the guardian here (assets.ts). Reached only
@@ -75,14 +76,11 @@ export default {
     // Everything else is forwarded to the app Worker via the service binding.
     // If the app is unreachable, serve the maintenance page (graceful degrade).
     try {
-      return await env.APP_SERVICE.fetch(request);
+      return await env.APP_SERVICE.fetch(forApp(request));
     } catch {
       return new Response(maintenancePage(config), {
         status: 503,
-        headers: {
-          "content-type": "text/html; charset=utf-8",
-          "retry-after": "30",
-        },
+        headers: { ...PAGE_HEADERS, "retry-after": "30" },
       });
     }
   },

@@ -92,6 +92,25 @@ const main = async () => {
     await releaseLock(env, second!);
     eq("鍵: 持ち主の release で消える", store.has("workerops:lock"), false);
   }
+  {
+    // 人の操作は app の鍵を取り上げる(課題 89ea7dcf)。app が hold を回し続けても、復旧の操作は締め出されない。
+    const { env, store } = fakeEnv();
+    const { acquireLock, releaseLock, PEER_KIND } = await import("./state");
+    const { runRevert } = await import("./orchestrator");
+    await peerHold(env, HOLD_MAX_MS);
+    eq("鍵: 番人が自分で行う操作は app の鍵を取り上げない", await acquireLock(env, 120_000), null);
+    const taken = await acquireLock(env, 120_000, "op", PEER_KIND);
+    eq("鍵: トークンの持ち主の操作は app の鍵を取り上げる", !!taken && taken.startsWith("op:"), true);
+    eq("鍵: 動いている操作の鍵は、人の操作でも取り上げない", await acquireLock(env, 120_000, "op", PEER_KIND), null);
+    await peerRelease(env);
+    eq("鍵: 取り上げられた後の app の release は、操作の鍵を消さない", store.has("workerops:lock"), true);
+    await releaseLock(env, taken!);
+    await peerHold(env, HOLD_MAX_MS);
+    // DEFECTS=off: 試験から本番の Defects へ送らない(manual_required は知らせの対象)。
+    const r = await runRevert({ ...env, DEFECTS: "off" } as Env, { lockTtlMs: 120_000 } as unknown as Config);
+    eq("Revert: app が鍵を握っていても走る(戻す先が無いので manual_required まで進む)", r.status, "manual_required");
+    eq("Revert: 終われば鍵は空く", store.has("workerops:lock"), false);
+  }
   if (failed) {
     console.log(`\n${failed} 件失敗`);
     process.exit(1);

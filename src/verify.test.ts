@@ -33,6 +33,8 @@ function fakeEnv(state: Record<string, unknown>, answer: { ok: boolean; version?
     WORKEROPS_STATE: ns,
     APP_SERVICE: { fetch: async () => new Response(JSON.stringify(answer), { status: answer.ok ? 200 : 500 }) },
     APP_WORKER_NAME: "app", CF_ACCOUNT_ID: "acc", CF_API_TOKEN: "t",
+    // 試験から本番の Defects へ送らない(既定は送る)。
+    DEFECTS: "off",
   } as unknown as Env;
   return { env, state: () => JSON.parse(store.get("workerops:state")!), store };
 }

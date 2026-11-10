@@ -62,6 +62,8 @@ export interface UpdateState {
 }
 
 const STATE_KEY = "workerops:state";
+/** The kind of the app's hold (peer.ts): released by kind, and taken over by the token holder's operations. */
+export const PEER_KIND = "peer";
 export const LOCK_KEY = "workerops:lock";
 
 const DEFAULT_STATE: UpdateState = {
@@ -235,9 +237,17 @@ export async function acquireLock(
   env: Env,
   lockTtlMs: number,
   kind = "op",
+  /**
+   * A kind of lock this caller may take over while it is still live. Only an operation the token
+   * holder asked for passes PEER_KIND: the app's hold (peer.ts) keeps the guardian from updating
+   * the app on its own, but it must not keep the owner from reverting or replacing the app — an
+   * app that holds the lock again and again would shut the recovery console out. A lock of any
+   * other kind (an operation that is running) is never taken over.
+   */
+  over?: string,
 ): Promise<string | null> {
   const lock = await readLock(env);
-  if (lock && lock !== "corrupt" && lockLive(lock, lockTtlMs)) return null;
+  if (lock && lock !== "corrupt" && lockLive(lock, lockTtlMs) && !(over && lock.owner?.startsWith(`${over}:`))) return null;
   const owner = `${kind}:${crypto.randomUUID()}`;
   await env.WORKEROPS_STATE.put(LOCK_KEY, JSON.stringify({ at: Date.now(), ttl: lockTtlMs, owner } satisfies Lock), {
     expirationTtl: Math.max(60, Math.ceil(lockTtlMs / 1000)),

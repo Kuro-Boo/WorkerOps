@@ -127,6 +127,8 @@ export async function releaseInfo(env: Env, config: Config): Promise<ReleaseInfo
 /** Apply the version the owner named. Without a name, the offered version (what the console showed). */
 export async function applyRelease(
   env: Env, ctx: ExecutionContext, config: Config, version?: string, reinstall = false,
+  /** The token holder asked (ops.ts). The automatic update leaves it false and waits for the app's hold. */
+  byOperator = false,
 ): Promise<Response> {
   let target = version;
   if (!target) {
@@ -137,7 +139,7 @@ export async function applyRelease(
     throw new OpsError(409, "no_release", "No release is offered for this product.");
   }
   const release = await fetchDistRelease(env, config, target);
-  return deploySignedRelease(env, ctx, config, release, reinstall);
+  return deploySignedRelease(env, ctx, config, release, reinstall, false, byOperator);
 }
 
 /** The app's admin screen holds the choice: changing it here would be overridden on the next look. */

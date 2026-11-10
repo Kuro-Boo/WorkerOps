@@ -15,6 +15,7 @@ import { answeredBy, probeHealth, runMigrate } from "./health";
 import { addColumnTarget, createIndexName, splitSql } from "./sql";
 import { trialVersion } from "./trial";
 import {
+  PEER_KIND,
   acquireLock,
   appendEvent,
   getState,
@@ -380,6 +381,8 @@ export async function deploySignedRelease(
    * 版を指して配る/戻す)だけ真。ふだんは古い版を入れない(取得口の誤りで版を下げないため)。
    */
   allowDowngrade = false,
+  /** The token holder asked for this (Update / Rebuild): it takes the app's hold over (state.ts acquireLock). */
+  byOperator = false,
 ): Promise<Response> {
   if (!config.token || !config.accountId || !config.appWorkerName) return response({ error: "cf_config_missing" }, 503);
   // What the app reports wins over our record: the app may have updated itself
@@ -389,7 +392,7 @@ export async function deploySignedRelease(
   if (current && !allowDowngrade && compareVersion(release.manifest.version, current) < 0) return response({ error: "release_downgrade" }, 409);
   // Rebuild puts the running version in again on purpose.
   if (current === release.manifest.version && !reinstall) return response({ ok: true, status: "already_current", version: current });
-  const lock = await acquireLock(env, config.lockTtlMs);
+  const lock = await acquireLock(env, config.lockTtlMs, "op", byOperator ? PEER_KIND : undefined);
   if (!lock) return response({ error: "update_in_progress" }, 409);
 
   const client = new CfClient(config.token, config.accountId, config.appWorkerName, { max: config.retryMax, baseMs: config.retryBaseMs });

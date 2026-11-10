@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import type { Config } from "./config";
-import { LOCK_KEY, acquireLock, getState, releaseKind, type UpdateStatus } from "./state";
+import { LOCK_KEY, PEER_KIND, acquireLock, getState, releaseKind, type UpdateStatus } from "./state";
 import { WORKEROPS_VERSION } from "./version";
 import { getRestart, restartEnabled, type RestartRecord } from "./restart";
 
@@ -19,6 +19,10 @@ import { getRestart, restartEnabled, type RestartRecord } from "./restart";
  *                  the app replaces the guardian. Refuses while an app update
  *                  is running or being verified.
  *   release()      give the lock back.
+ *
+ * The hold stops what the guardian does on its own (automatic updates, restarts, publishing). An
+ * operation the token holder asks for (Revert / Update / Rebuild) takes the hold over (state.ts
+ * acquireLock `over`): the app must never be able to shut the owner out of the recovery console.
  */
 
 export interface PeerStatus {
@@ -42,7 +46,7 @@ export type HoldResult = { ok: true } | { ok: false; reason: "update_in_progress
 
 /** Upper bound on a hold: the lock always expires, even if the app never comes back. */
 /** The app's hold is released by a separate call: it is let go by kind, never another operation's lock. */
-const PEER = "peer";
+const PEER = PEER_KIND;
 
 export const HOLD_MAX_MS = 10 * 60 * 1000;
 const HOLD_MIN_MS = 60 * 1000;

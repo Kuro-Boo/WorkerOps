@@ -9,7 +9,7 @@ import { probeHealth } from "./health";
 import { fetchAppIncidents } from "./incidents";
 import { WORKEROPS_VERSION } from "./version";
 import { CfClient } from "./cf";
-import { jsonResponse, constantTimeEqual, OpsError } from "./util";
+import { jsonResponse, sameSecret, OpsError } from "./util";
 
 function tokenFromRequest(request: Request): string | null {
   const auth = request.headers.get("authorization");
@@ -18,16 +18,27 @@ function tokenFromRequest(request: Request): string | null {
   return h ? h.trim() : null;
 }
 
-function hasToken(request: Request, config: Config): boolean {
+/** Whether the request carries the WorkerOps token. Checked once per request (handleOps). */
+async function hasToken(request: Request, config: Config): Promise<boolean> {
   const t = tokenFromRequest(request);
-  return !!config.opsToken && !!t && constantTimeEqual(t, config.opsToken);
+  return !!config.opsToken && !!t && (await sameSecret(t, config.opsToken));
 }
 
-function requireToken(request: Request, config: Config): void {
-  if (!hasToken(request, config)) {
-    throw new OpsError(401, "unauthorized", "A valid WorkerOps token is required.");
-  }
-}
+/**
+ * Headers of the recovery page. Nothing is loaded from elsewhere and nothing may be sent elsewhere
+ * (the page takes the WorkerOps token): scripts and styles are the inline ones, requests go to this
+ * origin only, and no other site may put the page in a frame.
+ */
+export const PAGE_HEADERS: Record<string, string> = {
+  "content-type": "text/html; charset=utf-8",
+  "content-security-policy":
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; " +
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+  "cache-control": "no-store",
+};
 
 /** Routes everything under OPS_PATH. With OPS_SCREEN=on the recovery page and status are
  *  public and actions require the WorkerOps token; without it, everything requires the token. */
@@ -37,18 +48,24 @@ export async function handleOps(
   ctx: ExecutionContext,
   loaded: Config,
 ): Promise<Response> {
-  // PRODUCT_ID from the settings, or the one the app declares in its health response.
-  const config = await resolveConfig(env, loaded);
   const url = new URL(request.url);
-  let sub = url.pathname.slice(config.opsPath.length);
+  let sub = url.pathname.slice(loaded.opsPath.length);
   if (sub === "") sub = "/";
+  const authed = await hasToken(request, loaded);
+  const requireToken = (): void => {
+    if (!authed) throw new OpsError(401, "unauthorized", "A valid WorkerOps token is required.");
+  };
 
   // Unless the screen is switched on (secret OPS_SCREEN=on, customer installs), show nothing
   // without the token — not the page, not the status. 404, not 401: do not tell that a guardian
   // is here. /api/v1/health stays open (version only; the app checks it after replacing the guardian).
-  if (!config.opsScreen && sub !== "/api/v1/health" && !hasToken(request, config)) {
+  // Decided before anything else runs: a request that is turned away must not reach the app
+  // (resolveConfig below may ask the app's health).
+  if (!loaded.opsScreen && sub !== "/api/v1/health" && !authed) {
     return jsonResponse({ error: "not_found" }, 404);
   }
+  // PRODUCT_ID from the settings, or the one the app declares in its health response.
+  const config = await resolveConfig(env, loaded);
 
   try {
     // Status payload. Shared by the recovery page and the REST API.
@@ -59,7 +76,7 @@ export async function handleOps(
     // incidents and the distribution endpoint are read only for a caller with the token. Otherwise a
     // stream of public GETs spends the account's API allowance the guardian needs to revert with.
     const status = async (): Promise<Response> => {
-      const full = hasToken(request, config);
+      const full = authed;
       const [state, activeVersionId, health, incidents, release, assets] = await Promise.all([
         getState(env),
         full
@@ -76,6 +93,17 @@ export async function handleOps(
         assetsRecord(env).catch(() => null),
       ]);
       const restart = restartEnabled(env) ? await getRestart(env).catch(() => null) : null;
+      // Without the token, the words of a failure stay inside: error texts carry what the
+      // Cloudflare API and the database answered (names of tables, of bindings). What happened —
+      // the status word, each step and whether it passed, versions, counts — is still shown.
+      const shown = full ? { state, restart, assets } : {
+        state: {
+          ...state, error: null, lastAutoRevertReason: null,
+          events: state.events.map(({ detail: _detail, ...e }) => e),
+        },
+        restart: restart ? { ...restart, lastReason: null } : restart,
+        assets: assets ? { ...assets, error: null } : assets,
+      };
       return jsonResponse({
         app: {
           workerName: config.appWorkerName,
@@ -93,9 +121,9 @@ export async function handleOps(
           healthIntervalMs: config.healthIntervalMs,
           lockTtlMs: config.lockTtlMs,
         },
-        state,
-        restart,
-        assets,
+        ...shown,
+        // Whether the texts above were left out (the page then asks for the token to read them).
+        detail: authed ? "all" : "token_required",
         // The guardian does not replace itself: the app it fronts updates it
         // (cms-workerops「番人の更新は app が行う」). It only names its version.
         self: { version: WORKEROPS_VERSION },
@@ -108,9 +136,7 @@ export async function handleOps(
 
     // Recovery page (HTML).
     if (sub === "/" && request.method === "GET") {
-      return new Response(recoveryPage(config), {
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
+      return new Response(recoveryPage(config), { headers: PAGE_HEADERS });
     }
 
     // REST API liveness (for AI/external callers).
@@ -138,19 +164,21 @@ export async function handleOps(
     //   been recorded yet, and it still left the guardian in `manual_required`.
     //   Any credential check must have a read-only endpoint to aim at.
     if (request.method === "GET" && sub === "/api/v1/auth-check") {
-      requireToken(request, config);
+      requireToken();
       return jsonResponse({ ok: true, authorized: true, service: "workerops" });
     }
 
-    // Release offered by the distribution endpoint (PRODUCT_ID set). Public,
-    // like status: it says which version could be installed — nothing more.
+    // Release offered by the distribution endpoint (PRODUCT_ID set). Token only, like the
+    // `release` part of status: answering it asks the distribution endpoint (and, for a
+    // development version, the app for its token), which a public GET must not set off.
     if (request.method === "GET" && sub === "/api/v1/release") {
+      requireToken();
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       return jsonResponse(await releaseInfo(env, config));
     }
     // Automatic updates: on unless the token holder turns them off.
     if ((request.method === "PUT" || request.method === "POST") && sub === "/api/v1/release/auto") {
-      requireToken(request, config);
+      requireToken();
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       const body = (await request.json().catch(() => ({}))) as { enabled?: unknown };
       if (typeof body.enabled !== "boolean") throw new OpsError(400, "bad_request", "enabled must be true or false.");
@@ -158,7 +186,7 @@ export async function handleOps(
     }
     // Which channel the app follows: stable, or dev (every published version). The token holder picks.
     if ((request.method === "PUT" || request.method === "POST") && sub === "/api/v1/release/channel") {
-      requireToken(request, config);
+      requireToken();
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       const body = (await request.json().catch(() => ({}))) as { channel?: unknown };
       return jsonResponse({ ok: true, ...(await setChannel(env, config, body.channel)) });
@@ -169,18 +197,18 @@ export async function handleOps(
     // the owner named in the body, or the offered one the console displayed.
     // There is no other source (GitHub releases are not read — 2026-10-21).
     if (request.method === "POST" && (sub === "/update" || sub === "/api/v1/update")) {
-      requireToken(request, config);
+      requireToken();
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
       const body = (await request.json().catch(() => ({}))) as { version?: unknown };
-      return applyRelease(env, ctx, config, typeof body.version === "string" ? body.version : undefined);
+      return applyRelease(env, ctx, config, typeof body.version === "string" ? body.version : undefined, false, true);
     }
     if (request.method === "POST" && (sub === "/reinstall" || sub === "/api/v1/reinstall")) {
-      requireToken(request, config);
+      requireToken();
       if (!config.productId) return jsonResponse({ error: "not_configured" }, 404);
-      return applyRelease(env, ctx, config, undefined, true);
+      return applyRelease(env, ctx, config, undefined, true, true);
     }
     if (request.method === "POST" && (sub === "/revert" || sub === "/api/v1/revert")) {
-      requireToken(request, config);
+      requireToken();
       return jsonResponse(await runRevert(env, config));
     }
 
@@ -342,6 +370,7 @@ var STR={
   st_self_read_settings:'設定とバインディングを読み出し',st_self_upload:'新しい版をアップロード',
   st_self_deploy:'新しい版を配備',st_self_verify:'公開URL越しに新版を検証',st_self_rollback:'自己更新を巻き戻し',
   st_self_error:'自己更新でエラー',
+  whyTok:'理由はトークンを入れると表示されます',
   needtok:'操作には WORKER_OPS_TOKEN が必要です',confirm:'{op} を実行しますか？',
   dlgRunning:'実行中… この画面を閉じても処理は続きます',dlgWaiting:'サーバーの応答を待っています…',
   dlgDone:'完了しました',dlgFailed:'失敗しました',dlgTimeout:'画面の追跡を打ち切りました（処理はサーバー側で続いています）',
@@ -385,6 +414,7 @@ var STR={
   st_self_read_settings:'Read settings and bindings',st_self_upload:'Upload the new version',
   st_self_deploy:'Deploy the new version',st_self_verify:'Verify the new version over the public URL',st_self_rollback:'Roll the self-update back',
   st_self_error:'Self-update error',
+  whyTok:'enter the token to read the reason',
   needtok:'A WORKER_OPS_TOKEN is required for operations',confirm:'Run {op}?',
   dlgRunning:'Running… closing this dialog does not stop it',dlgWaiting:'Waiting for the server…',
   dlgDone:'Finished',dlgFailed:'Failed',dlgTimeout:'Stopped following along (the server is still working)',
@@ -399,10 +429,11 @@ var lang=(saved==='ja'||saved==='en')?saved:(/^ja/.test((navigator.language||'')
 function t(k){return (STR[lang]||STR.en)[k];}
 var lastData=null;
 var TERMINAL={confirmed:1,reverted:1,failed_predeploy:1,manual_required:1,idle:1};
+var FAILED={reverted:1,failed_predeploy:1,manual_required:1};
 var tracking=null;
 function tok(){return document.getElementById('tok').value.trim();}
 function setErr(m){document.getElementById('err').textContent=m||'';}
-function esc(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function fill(s,o){var r=String(s);for(var k in o){r=r.split('{'+k+'}').join(String(o[k]));}return r;}
 function row(k,v){return '<div class="row"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>';}
 function rowH(k,v,hint){return '<div class="row"><span class="k">'+k+'</span><span class="v stack"><span>'+v+'</span><span class="hint">'+hint+'</span></span></div>';}
@@ -477,7 +508,7 @@ function render(d){lastData=d;var s=d.state||{},h=d.health||{},app=d.app||{},tn=
  row('app','<span class="dot" style="background:'+color+'"></span>'+(h.ok?t('up'):t('down'))+' (HTTP '+esc(h.status)+')')+
  row(t('running'),esc(h.version||'—'))+
  releaseRow(d.release)+
- row(t('ustate'),esc(s.status||'—')+(s.error?(' — '+esc(s.error)):''))+
+ row(t('ustate'),esc(s.status||'—')+(s.error?(' — '+esc(s.error)):((d.detail==='token_required'&&FAILED[s.status]===1)?(' — '+t('whyTok')):'')))+
  selfRows(d.self||{})+
  autoRevertRow(s)+
  restartRow(d.restart)+

@@ -4,6 +4,7 @@ import { CfClient } from "./cf";
 import {
   getState,
   setState,
+  PEER_KIND,
   acquireLock,
   releaseLock,
   clearStaleLock,
@@ -127,7 +128,8 @@ async function revertTo(
 
 /** Manual revert from the Ops API. */
 export async function runRevert(env: Env, config: Config): Promise<DeployResult> {
-  const lock = await acquireLock(env, config.lockTtlMs);
+  // The token holder asked: the app's hold does not stand in the way (state.ts acquireLock).
+  const lock = await acquireLock(env, config.lockTtlMs, "op", PEER_KIND);
   if (!lock) {
     throw new OpsError(409, "update_in_progress", "An operation is already in progress.");
   }

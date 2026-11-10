@@ -24,6 +24,19 @@ import type { HealthResult } from "./health";
 
 export const OVERRIDE_HEADER = "Cloudflare-Workers-Version-Overrides";
 
+/**
+ * A visitor does not choose which version of the app answers. The version override header works
+ * over a service binding too (trial.ts), and during a trial an unverified version sits in the
+ * deployment at 0% — so the header is taken off before a public request is passed on. The
+ * guardian's own probes set it themselves (health.ts) and do not come through here.
+ */
+export function forApp(request: Request): Request {
+  if (!request.headers.has(OVERRIDE_HEADER)) return request;
+  const passed = new Request(request);
+  passed.headers.delete(OVERRIDE_HEADER);
+  return passed;
+}
+
 /** 構造化ヘッダの辞書の 1 項目(Worker の名前 = "版の ID")。 */
 export function overrideValue(worker: string, versionId: string): string {
   return `${worker}="${versionId}"`;

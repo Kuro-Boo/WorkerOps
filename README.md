@@ -71,7 +71,7 @@ Apps bound to the guardian can also call it over RPC (the `WorkerOpsAssets` entr
 | Method | What it does |
 |---|---|
 | `publish(manifest, read)` | Hand over built static pages. The guardian uploads only the changed files and publishes a version with the current code, so last-good never drifts |
-| `status()` / `hold(ttl)` / `release()` | Let the app replace the guardian safely (the lock lasts at most 10 minutes) |
+| `status()` / `hold(ttl)` / `release()` | Let the app replace the guardian safely (the lock lasts at most 10 minutes; an operation asked for with the token takes it over) |
 | `recheck()` | Check for a newer release now, instead of waiting for the daily check |
 | `restart(reason)` | Deploy the serving version again (an operator's button in the app) |
 
@@ -82,8 +82,8 @@ Everything lives under `OPS_PATH` (default `/__workerops__`), so it never collid
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/api/v1/health` | none | Guardian liveness and version |
-| GET | `/api/v1/status` | screen\* | App health, update state, active version, recent failures, offered release |
-| GET | `/api/v1/release` | screen\* | Offered version on the channel, and whether it is newer |
+| GET | `/api/v1/status` | screen\* | App health and update state. With the token: also failure texts, active version, recent failures, offered release |
+| GET | `/api/v1/release` | token | Offered version on the channel, and whether it is newer |
 | GET | `/api/v1/auth-check` | token | Check a token without changing anything |
 | POST | `/api/v1/update` | token | Install the offered (or a named) version |
 | POST | `/api/v1/reinstall` | token | Install the current release again (repair) |

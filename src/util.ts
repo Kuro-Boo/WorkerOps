@@ -22,15 +22,29 @@ export class OpsError extends Error {
 export function jsonResponse(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      // Status, errors and operation results: never kept by a cache, never sniffed as something else.
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    },
   });
 }
 
-/** Length-stable string comparison for guarding the Ops token. */
-export function constantTimeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
+/**
+ * Compare a presented secret with the stored one. Both are hashed first, so the comparison always
+ * runs over 32 bytes: neither where they differ nor how long the stored secret is shows in the time taken.
+ */
+export async function sameSecret(given: string, stored: string): Promise<boolean> {
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(given)),
+    crypto.subtle.digest("SHA-256", enc.encode(stored)),
+  ]);
+  const x = new Uint8Array(a);
+  const y = new Uint8Array(b);
   let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  for (let i = 0; i < x.length; i++) diff |= x[i]! ^ y[i]!;
   return diff === 0;
 }
 
