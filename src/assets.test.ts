@@ -192,6 +192,33 @@ eq("25 MiB を超えるファイル", validateManifest({ "/a": { hash: h("a"), s
   eq("コードの更新は keep_assets: true", sent[0]!.keep_assets, true);
   eq("資産を渡すときは keep_assets を付けない", [sent[1]!.keep_assets, sent[1]!.assets], [undefined, { jwt: "j" }]);
   eq("外すときはどちらも付けない", [sent[2]!.keep_assets, sent[2]!.assets], [undefined, undefined]);
+  await cf.uploadVersion("x", [], "2026-05-13", [], undefined, { region: "aws:ap-northeast-1" });
+  eq("地域を渡すと版に載る", sent[3]!.placement, { region: "aws:ap-northeast-1" });
+  eq("渡さなければ付けない", "placement" in sent[0]!, false);
+}
+
+// ── 地域の引き継ぎ(版に渡さないと外れる・2026-11-11 に試験の Worker で確かめた) ──
+{
+  const settingsOf = async (placement: unknown, list: () => Response, region?: unknown) => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (u: unknown) => {
+      urls.push(String(u));
+      if (String(u).endsWith("/settings")) return new Response(JSON.stringify({ success: true, result: { bindings: [], placement } }));
+      return list();
+    }) as typeof fetch;
+    const got = await new CfClient("t", "a", "app", { max: 1, baseMs: 1 }).getSettings(region);
+    return { placement: got.placement, urls: urls.length };
+  };
+  const named = () => new Response(JSON.stringify({ success: true, result: [
+    { id: "other", placement: { target: [{ region: "gcp:us-east1" }] } },
+    { id: "app", placement: { mode: "targeted", target: [{ id: 12, region: "aws:ap-northeast-1" }] } },
+  ] }));
+  eq("版の名指しが勝ち、一覧は読まない", await settingsOf({ mode: "smart" }, named, "aws:ap-northeast-3"), { placement: { region: "aws:ap-northeast-3" }, urls: 1 });
+  eq("smart はそのまま引き継ぐ", await settingsOf({ mode: "smart" }, named), { placement: { mode: "smart" }, urls: 1 });
+  eq("指定なしは付けない", await settingsOf({}, named), { placement: undefined, urls: 1 });
+  eq("番号しか返らない地域は一覧から名前を引く", await settingsOf({ mode: "targeted", target: [12] }, named), { placement: { region: "aws:ap-northeast-1" }, urls: 2 });
+  eq("形の違う名指しは使わない", await settingsOf({}, named, "tokyo"), { placement: undefined, urls: 1 });
+  eq("一覧が読めなくても配備は止めない", await settingsOf({ mode: "targeted", target: [12] }, () => new Response("x", { status: 500 })), { placement: undefined, urls: 2 });
 }
 
 if (failed) {

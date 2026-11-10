@@ -17,6 +17,13 @@ export interface VersionAssets {
   config?: Record<string, unknown>;
 }
 
+/**
+ * Where a version runs. It is part of each version: a version uploaded without it takes the Worker
+ * back to "wherever the request landed" (confirmed on a test Worker 2026-11-11).
+ */
+export type Placement = { region: string } | { mode: "smart" };
+const PLACEMENT_REGION = /^(aws|gcp|azure):[a-z0-9-]{2,40}$/;
+
 /** A Worker's modules, the first-class shape a version is uploaded from. */
 export interface WorkerCode {
   mainModule: string;
@@ -58,7 +65,7 @@ export class CfClient {
   constructor(
     private readonly token: string,
     accountId: string,
-    scriptName: string,
+    private readonly scriptName: string,
     private readonly retry: RetryOptions,
   ) {
     this.account = `${CF_BASE}/accounts/${accountId}`;
@@ -84,11 +91,15 @@ export class CfClient {
     return data.result;
   }
 
-  /** Current script bindings & compatibility settings (to preserve on redeploy). */
-  async getSettings(): Promise<{
+  /**
+   * Current script bindings, compatibility settings and placement (to preserve on redeploy).
+   * `region` (the signed release's placement_region) wins over the Worker's current placement.
+   */
+  async getSettings(region?: unknown): Promise<{
     bindings: unknown[];
     compatibility_date: string;
     compatibility_flags: string[];
+    placement?: Placement;
   }> {
     const res = await fetchRetry(
       `${this.base}/settings`,
@@ -99,12 +110,37 @@ export class CfClient {
       bindings?: unknown[];
       compatibility_date?: string;
       compatibility_flags?: string[];
+      placement?: { mode?: string } | null;
     }>(res, "getSettings");
+    const placement = typeof region === "string" && PLACEMENT_REGION.test(region)
+      ? { region }
+      : await this.keptPlacement(r.placement?.mode);
     return {
       bindings: r.bindings ?? [],
       compatibility_date: r.compatibility_date ?? "2024-11-01",
       compatibility_flags: r.compatibility_flags ?? [],
+      ...(placement ? { placement } : {}),
     };
+  }
+
+  /**
+   * The current placement, in the form a version upload accepts. `settings` gives a targeted region
+   * only as a bare id (`target: [12]`), which an upload rejects (10021); the script list has its name.
+   * Best effort: a revert must not stop because the list could not be read.
+   */
+  private async keptPlacement(mode: string | undefined): Promise<Placement | undefined> {
+    if (mode === "smart") return { mode: "smart" };
+    if (mode !== "targeted") return undefined;
+    try {
+      const res = await fetchRetry(`${this.account}/workers/scripts`, { headers: this.auth() }, this.retry);
+      const list = await this.parse<Array<{ id?: string; placement?: { target?: Array<{ region?: string }> } }>>(res, "listScripts");
+      const region = list.find((s) => s.id === this.scriptName)?.placement?.target?.[0]?.region;
+      if (region && PLACEMENT_REGION.test(region)) return { region };
+      console.warn("placement: targeted region not found", this.scriptName);
+    } catch (e) {
+      console.warn("placement: could not read the targeted region", this.scriptName, e);
+    }
+    return undefined;
   }
 
   /**
@@ -148,6 +184,7 @@ export class CfClient {
     compatibilityDate: string,
     compatibilityFlags: string[],
     assets?: VersionAssets | "none",
+    placement?: Placement,
   ): Promise<string> {
     return this.uploadModules(
       { mainModule: "worker.js", modules: [new File([script], "worker.js", { type: "application/javascript+module" })] },
@@ -155,6 +192,7 @@ export class CfClient {
       compatibilityDate,
       compatibilityFlags,
       assets,
+      placement,
     );
   }
 
@@ -169,6 +207,7 @@ export class CfClient {
     compatibilityDate: string,
     compatibilityFlags: string[],
     assets?: VersionAssets | "none",
+    placement?: Placement,
   ): Promise<string> {
     const metadata = {
       main_module: code.mainModule,
@@ -176,6 +215,7 @@ export class CfClient {
       compatibility_date: compatibilityDate,
       compatibility_flags: compatibilityFlags,
       ...(assets === "none" ? {} : assets ? { assets } : { keep_assets: true }),
+      ...(placement ? { placement } : {}),
     };
     const form = new FormData();
     form.append(

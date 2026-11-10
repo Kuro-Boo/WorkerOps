@@ -159,6 +159,8 @@ export async function restoreVersion(
         filterBindings(settings.bindings, bindingTypes),
         settings.compatibility_date,
         settings.compatibility_flags,
+        undefined,
+        settings.placement,
       );
       await cf.deployVersion(versionId, message);
       return { how: "code", versionId };
@@ -257,6 +259,7 @@ export async function publishAssets(
       settings.compatibility_date,
       settings.compatibility_flags,
       empty ? "none" : { jwt: completion, config: { ...DEFAULT_ASSETS_CONFIG, ...(options.config ?? {}) } },
+      settings.placement,
     );
     await cf.deployVersion(versionId, empty ? "WorkerOps assets cleared" : `WorkerOps assets ${files} files (${uploaded} new)`);
 

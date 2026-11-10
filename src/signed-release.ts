@@ -415,13 +415,14 @@ export async function deploySignedRelease(
       await applyMigrations(env, release.migrations);
       await appendEvent(env, "migrate", "ok");
     }
-    const settings = await client.getSettings();
+    // 地域は版ごとの設定で、渡さないと外れる。版が名指ししていればそれ、無ければ今の地域を引き継ぐ(cf.ts)。
+    const settings = await client.getSettings(release.manifest.placement_region);
     // 版が運ぶ設定の値を重ねる(版に無い値は残す・bindings.ts の applyVars)。
     const bindings = applyVars(filterBindings(settings.bindings, config.bindingTypes), release.vars);
     // 版が資産を運ぶなら、その資産を版に付ける(運ばない版は今の資産を残す)。
     const assets = release.staticAssets ? await uploadStaticAssets(client, release.staticAssets) : undefined;
     if (release.staticAssets) await appendEvent(env, "static_assets", "ok", `${release.staticAssets.files.length} files`);
-    const versionId = await client.uploadVersion(release.worker, bindings, settings.compatibility_date, settings.compatibility_flags, assets);
+    const versionId = await client.uploadVersion(release.worker, bindings, settings.compatibility_date, settings.compatibility_flags, assets, settings.placement);
     await setState(env, { toVersionId: versionId });
     if (config.trialBeforeDeploy) {
       // 確かめてから配る(trial.ts)。だめなら本番は今の版のまま。この版は二度と自分から入れない。
