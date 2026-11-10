@@ -28,6 +28,7 @@ const store = (entries: Record<string, string | Buffer>) => {
       const v = m.get(k);
       if (v === undefined) return null;
       if (type === "arrayBuffer") { const b = Buffer.from(v); return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength); }
+      if (type === "stream") return new Blob([Buffer.from(v)]).stream();
       return String(v);
     },
     async put(k: string, v: string) { m.set(k, v); },

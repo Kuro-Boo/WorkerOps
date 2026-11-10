@@ -25,11 +25,10 @@
 import type { Env } from "./types";
 import { withTimeout } from "./util";
 import type { Config, ReleaseChannel } from "./config";
-import { verifyManifest, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
+import { MANIFEST_LIMIT, readCapped, verifyManifest, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
 import { fetchStoreRelease, storePointer } from "./store-release";
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
-const MANIFEST_LIMIT = 256 * 1024;
 
 export interface Pointer {
   product_id: string;
@@ -95,8 +94,7 @@ export async function fetchDistRelease(env: Env, config: Config, version: string
   const mr = await get(env, `/v1/dist/${config.productId}/${version}/manifest.json`);
   if (mr.status === 404) throw new Error(`release ${version} is not available (missing or withdrawn)`);
   if (!mr.ok) throw new Error(`release manifest fetch failed: HTTP ${mr.status}`);
-  const text = await mr.text();
-  if (text.length > MANIFEST_LIMIT) throw new Error("release manifest is too large");
+  const text = new TextDecoder().decode(await readCapped(mr.body, MANIFEST_LIMIT, "release manifest"));
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { throw new Error("release manifest is not JSON"); }
 
@@ -112,7 +110,8 @@ export async function fetchDistRelease(env: Env, config: Config, version: string
     if (!r.ok) throw new Error(`${a.name} fetch failed: HTTP ${r.status}`);
     let body: ReadableStream<Uint8Array> | null = r.body;
     if (r.headers.get("x-entamy-encoding") === "gzip" && body) body = body.pipeThrough(new DecompressionStream("gzip"));
-    files.set(a.name, new Uint8Array(await new Response(body).arrayBuffer()));
+    // Held to the size the signed manifest declares (checked against the limits in verifyManifest).
+    files.set(a.name, await readCapped(body, a.size, a.name));
   }
   return verifyArtifacts(manifest, files);
 }

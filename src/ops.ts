@@ -3,7 +3,7 @@ import type { Env } from "./types";
 import type { Config } from "./config";
 import { getState } from "./state";
 import { getRestart, restartEnabled } from "./restart";
-import { runRevert, watchdogTick } from "./orchestrator";
+import { runRevert } from "./orchestrator";
 import { assetsRecord } from "./assets";
 import { probeHealth } from "./health";
 import { fetchAppIncidents } from "./incidents";
@@ -51,20 +51,28 @@ export async function handleOps(
   }
 
   try {
-    // Status payload (public). Shared by the recovery page and the REST API.
+    // Status payload. Shared by the recovery page and the REST API.
+    //
+    // With OPS_SCREEN=on anyone may read it, so without the token it only reads what the guardian
+    // holds (KV) and asks the app's health once — what a request to the app itself would cost. It
+    // starts nothing: the watchdog runs on the minute (tick.ts), and the Cloudflare API, the app's
+    // incidents and the distribution endpoint are read only for a caller with the token. Otherwise a
+    // stream of public GETs spends the account's API allowance the guardian needs to revert with.
     const status = async (): Promise<Response> => {
-      ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
+      const full = hasToken(request, config);
       const [state, activeVersionId, health, incidents, release, assets] = await Promise.all([
         getState(env),
-        new CfClient(config.token, config.accountId, config.appWorkerName, {
-          max: 1,
-          baseMs: config.retryBaseMs,
-        })
-          .getActiveVersionId()
-          .catch(() => null),
+        full
+          ? new CfClient(config.token, config.accountId, config.appWorkerName, {
+              max: 1,
+              baseMs: config.retryBaseMs,
+            })
+              .getActiveVersionId()
+              .catch(() => null)
+          : Promise.resolve(null),
         probeHealth(env, config).catch(() => ({ ok: false, status: 0 })),
-        fetchAppIncidents(config),
-        config.productId ? releaseInfo(env, config).catch(() => null) : Promise.resolve(null),
+        full ? fetchAppIncidents(config) : Promise.resolve(null),
+        full && config.productId ? releaseInfo(env, config).catch(() => null) : Promise.resolve(null),
         assetsRecord(env).catch(() => null),
       ]);
       const restart = restartEnabled(env) ? await getRestart(env).catch(() => null) : null;
@@ -276,7 +284,7 @@ hr{border:0;border-top:1px solid #334155;margin:14px 0}
 <div id="status"><div class="row"><span class="v" id="loading"></span></div></div>
 <hr>
 <p class="lbl" id="opTarget"></p>
-<div class="row"><input id="tok" type="password" autocomplete="off"></div>
+<div class="row"><input id="tok" type="password" autocomplete="off" onchange="loadStatus()"></div>
 <div class="err" id="err"></div>
 <div class="btns">
 <button class="op b-revert" onclick="act('revert')"><span class="ic"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12H8"/></svg></span><span class="t"><b id="t_revert"></b><span class="d" id="d_revert"></span></span></button>
@@ -413,7 +421,7 @@ function applyLabels(){
  if(lastData){render(lastData);}else{setText('loading',t('loading'));}}
 function setLang(v){lang=v;try{localStorage.setItem('wo_lang',v);}catch(e){}applyLabels();if(tracking)renderSteps(lastData);}
 async function loadStatus(){setErr('');
- try{var r=await fetch(OPS+'/status');var d=await r.json();
+ try{var r=await fetch(OPS+'/status',tok()?{headers:{'authorization':'Bearer '+tok()}}:{});var d=await r.json();
  if(!r.ok){setErr(d.message||d.error||('HTTP '+r.status));return;}render(d);}catch(e){setErr(String(e));}}
 function selfRows(sf){
  return rowH(t('selfVer'),esc(sf.version||'—'),t('selfVerHint'));}

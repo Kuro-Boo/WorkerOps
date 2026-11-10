@@ -76,3 +76,20 @@ export async function runMigrate(env: Env, config: Config): Promise<boolean> {
     { max: config.retryMax, baseMs: config.retryBaseMs },
   );
 }
+
+/**
+ * Whether this health answer came from the version just deployed (version-aware verification,
+ * CLAUDE.md・update-mgmt-s11 11.4節). Right after a deploy the service binding may still reach the
+ * old version, and the old version answers ok — counting that would confirm a version nobody has
+ * seen and record it as last-good (the revert target).
+ *
+ *   "new"     the answer names the intended version: judge it by its ok
+ *   "unknown" not yet (old version, or no version named) — keep waiting; at the end of the window
+ *             this is a failure, never a confirmation
+ *
+ * A reinstall puts the same version in again: the old and the new answer alike and cannot be told
+ * apart, so there an answer naming that version counts (it is the same code).
+ */
+export function answeredBy(h: HealthResult, intended: string | null): "new" | "unknown" {
+  return intended && h.version === intended ? "new" : "unknown";
+}

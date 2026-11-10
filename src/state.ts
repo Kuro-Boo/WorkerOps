@@ -33,6 +33,8 @@ export interface UpdateState {
   status: UpdateStatus;
   /** CF version id known to be healthy — the revert target. */
   lastGoodVersionId: string | null;
+  /** The release (X.Y.Z) the last-good version runs, when known: a revoked one is never gone back to. */
+  lastGoodRelease: string | null;
   fromVersionId: string | null;
   toVersionId: string | null;
   /** App's self-reported health.version BEFORE the update (propagation anchor). */
@@ -65,6 +67,7 @@ export const LOCK_KEY = "workerops:lock";
 const DEFAULT_STATE: UpdateState = {
   status: "idle",
   lastGoodVersionId: null,
+  lastGoodRelease: null,
   fromVersionId: null,
   toVersionId: null,
   prevAppVersion: null,
@@ -196,6 +199,11 @@ interface Lock {
    * take the lock over midway and update the app under the app's feet.
    */
   ttl?: number;
+  /**
+   * Who holds it: `<kind>:<random>`. Only the holder lets it go (releaseLock), so an operation that
+   * ends late — or the app's release — never removes a lock another operation took meanwhile.
+   */
+  owner?: string;
 }
 
 /** A lock still stands while younger than its own TTL (or the caller's, if it named none). */
@@ -204,43 +212,56 @@ function lockLive(lock: Lock, lockTtlMs: number): boolean {
   return Date.now() - lock.at < ttl;
 }
 
+async function readLock(env: Env): Promise<Lock | null | "corrupt"> {
+  const raw = await env.WORKEROPS_STATE.get(LOCK_KEY);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as Lock;
+  } catch {
+    return "corrupt";
+  }
+}
+
 /**
- * Single-flight lock. KV is eventually consistent, so this is best-effort —
- * adequate for admin-triggered updates. Stale locks expire via TTL + watchdog.
+ * Single-flight lock. Returns the holder's id (pass it to releaseLock), or null when another
+ * operation holds it.
+ *
+ * Where the state lives in a Durable Object (a concierge hosting the guardians: kv-shim.ts), the
+ * read and the write below run with no other I/O between them, so the object's input gate makes
+ * them one step and two requests cannot both take the lock. Over Workers KV they are two separate
+ * calls and KV has no compare-and-swap; requests from two locations can still both take it there.
  */
 export async function acquireLock(
   env: Env,
   lockTtlMs: number,
-): Promise<boolean> {
-  const raw = await env.WORKEROPS_STATE.get(LOCK_KEY);
-  if (raw) {
-    try {
-      const lock = JSON.parse(raw) as Lock;
-      if (lockLive(lock, lockTtlMs)) return false;
-    } catch {
-      /* corrupt lock — overwrite */
-    }
-  }
-  await env.WORKEROPS_STATE.put(LOCK_KEY, JSON.stringify({ at: Date.now(), ttl: lockTtlMs } satisfies Lock), {
+  kind = "op",
+): Promise<string | null> {
+  const lock = await readLock(env);
+  if (lock && lock !== "corrupt" && lockLive(lock, lockTtlMs)) return null;
+  const owner = `${kind}:${crypto.randomUUID()}`;
+  await env.WORKEROPS_STATE.put(LOCK_KEY, JSON.stringify({ at: Date.now(), ttl: lockTtlMs, owner } satisfies Lock), {
     expirationTtl: Math.max(60, Math.ceil(lockTtlMs / 1000)),
   });
-  return true;
+  return owner;
 }
 
-export async function releaseLock(env: Env): Promise<void> {
-  await env.WORKEROPS_STATE.delete(LOCK_KEY);
+/** Let the lock go — only if `owner` still holds it. */
+export async function releaseLock(env: Env, owner: string): Promise<void> {
+  const lock = await readLock(env);
+  if (lock && lock !== "corrupt" && lock.owner === owner) await env.WORKEROPS_STATE.delete(LOCK_KEY);
+}
+
+/** Let go a lock taken by `kind` (the app's hold: it releases by a separate call and keeps no id). */
+export async function releaseKind(env: Env, kind: string): Promise<void> {
+  const lock = await readLock(env);
+  if (lock && lock !== "corrupt" && lock.owner?.startsWith(`${kind}:`)) await env.WORKEROPS_STATE.delete(LOCK_KEY);
 }
 
 export async function clearStaleLock(
   env: Env,
   lockTtlMs: number,
 ): Promise<void> {
-  const raw = await env.WORKEROPS_STATE.get(LOCK_KEY);
-  if (!raw) return;
-  try {
-    const lock = JSON.parse(raw) as Lock;
-    if (!lockLive(lock, lockTtlMs)) await env.WORKEROPS_STATE.delete(LOCK_KEY);
-  } catch {
-    await env.WORKEROPS_STATE.delete(LOCK_KEY);
-  }
+  const lock = await readLock(env);
+  if (!lock) return;
+  if (lock === "corrupt" || !lockLive(lock, lockTtlMs)) await env.WORKEROPS_STATE.delete(LOCK_KEY);
 }

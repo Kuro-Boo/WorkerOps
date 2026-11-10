@@ -202,7 +202,8 @@ export async function publishAssets(
   const st = await getState(env);
   if (st.status === "pending" || st.status === "deployed_unverified")
     return { ok: false, status: "busy", error: "update_in_progress" };
-  if (!(await acquireLock(env, PUBLISH_LOCK_MS)))
+  const lock = await acquireLock(env, PUBLISH_LOCK_MS);
+  if (!lock)
     return { ok: false, status: "busy", error: "operation_in_progress" };
 
   const files = Object.keys(manifest).length;
@@ -274,6 +275,6 @@ export async function publishAssets(
     if (prev) await env.WORKEROPS_STATE.put(ASSETS_KEY, JSON.stringify(record));
     return { ok: false, status: "failed", error: errMsg(e) };
   } finally {
-    await releaseLock(env);
+    await releaseLock(env, lock);
   }
 }

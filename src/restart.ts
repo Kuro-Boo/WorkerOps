@@ -85,7 +85,8 @@ export type RestartTick = "off" | "busy" | "healthy" | "watching" | "restarted" 
 
 /** Put the serving version out again. Holds the guardian's lock; returns "ok" or an error code. */
 async function redeploy(env: Env, config: Config, deps: RestartDeps, reason: string): Promise<"ok" | "busy" | "no_active_version" | "deploy_failed"> {
-  if (!(await acquireLock(env, config.lockTtlMs))) return "busy";
+  const lock = await acquireLock(env, config.lockTtlMs);
+  if (!lock) return "busy";
   try {
     const cf = deps.client(config);
     const active = await cf.getActiveVersionId();
@@ -96,7 +97,7 @@ async function redeploy(env: Env, config: Config, deps: RestartDeps, reason: str
     console.log("restart failed", errMsg(e));
     return "deploy_failed";
   } finally {
-    await releaseLock(env);
+    await releaseLock(env, lock);
   }
 }
 

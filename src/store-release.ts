@@ -19,11 +19,10 @@
  */
 import type { Env } from "./types";
 import type { ReleaseChannel } from "./config";
-import { verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
+import { MANIFEST_LIMIT, checkArtifactSizes, readCapped, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
 import type { Pointer } from "./dist-release";
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
-const MANIFEST_LIMIT = 256 * 1024;
 
 const prefix = (product: string) => `release/${product}`;
 
@@ -35,6 +34,16 @@ export async function revokedVersions(store: KVNamespace, product: string): Prom
   try { parsed = JSON.parse(raw); } catch { throw new Error("revoked list is not JSON"); }
   if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === "string")) throw new Error("revoked list is invalid");
   return new Set(parsed as string[]);
+}
+
+/**
+ * Whether going back to `release` is forbidden: it is on the store's revoked list (billing-operations
+ * 5.3節「載った版へは戻さない・入れ直さない」). Only a store guardian keeps such a list; an unknown
+ * release cannot be checked and is not refused.
+ */
+export async function revokedTarget(env: Env, product: string | null | undefined, release: string | null): Promise<boolean> {
+  if (!env.RELEASE_STORE || !product || !release) return false;
+  return (await revokedVersions(env.RELEASE_STORE, product)).has(release);
 }
 
 /** The offered version, or null when none is offered (or the offered one is revoked). */
@@ -52,9 +61,9 @@ export async function storePointer(store: KVNamespace, product: string, channel:
 export async function fetchStoreRelease(store: KVNamespace, product: string, version: string): Promise<SignedRelease> {
   if (!VERSION_RE.test(version)) throw new Error("release version is invalid");
   if ((await revokedVersions(store, product)).has(version)) throw new Error(`release ${version} is revoked`);
-  const text = await store.get(`${prefix(product)}/${version}/manifest.json`);
-  if (text === null) throw new Error(`release ${version} is not in the store`);
-  if (text.length > MANIFEST_LIMIT) throw new Error("release manifest is too large");
+  const stream = await store.get(`${prefix(product)}/${version}/manifest.json`, "stream");
+  if (stream === null) throw new Error(`release ${version} is not in the store`);
+  const text = new TextDecoder().decode(await readCapped(stream, MANIFEST_LIMIT, "release manifest"));
   let manifest: Manifest;
   try { manifest = JSON.parse(text) as Manifest; } catch { throw new Error("release manifest is not JSON"); }
   if (!manifest || manifest.schema !== "entamy.release/2" || manifest.product !== product
@@ -69,9 +78,12 @@ export async function fetchStoreRelease(store: KVNamespace, product: string, ver
       || !Number.isSafeInteger(a.size) || a.size < 0) {
       throw new Error("release artifact metadata is invalid");
     }
-    const data = await store.get(`${prefix(product)}/blobs/${a.sha256}`, "arrayBuffer");
+  }
+  checkArtifactSizes(manifest.artifacts);
+  for (const a of manifest.artifacts) {
+    const data = await store.get(`${prefix(product)}/blobs/${a.sha256}`, "stream");
     if (data === null) throw new Error(`${a.name} is not in the store`);
-    files.set(a.name, new Uint8Array(data));
+    files.set(a.name, await readCapped(data, a.size, a.name));
   }
   return verifyArtifacts(manifest, files);
 }

@@ -11,7 +11,7 @@ import { applyVars, filterBindings } from "./bindings";
 import { CfClient, type VersionAssets } from "./cf";
 import { keepGoodCode, restoreVersion } from "./assets";
 import type { Config } from "./config";
-import { probeHealth, runMigrate } from "./health";
+import { answeredBy, probeHealth, runMigrate } from "./health";
 import { addColumnTarget, createIndexName, splitSql } from "./sql";
 import { trialVersion } from "./trial";
 import {
@@ -23,10 +23,59 @@ import {
   startJournal,
 } from "./state";
 import type { Env } from "./types";
+import { revokedTarget } from "./store-release";
 import { errMsg, nowIso, sleep } from "./util";
 
 const WORKER_LIMIT = 10 * 1024 * 1024;
 const MIGRATIONS_LIMIT = 5 * 1024 * 1024;
+/** The manifest itself (dist-release.ts・store-release.ts). */
+export const MANIFEST_LIMIT = 256 * 1024;
+/** A release carries the worker, its migrations, vars and static assets; a few more at most. */
+const MAX_ARTIFACTS = 16;
+/** Everything a release may carry together (each artifact also has its own limit). */
+const TOTAL_LIMIT = 2 * WORKER_LIMIT + MIGRATIONS_LIMIT;
+
+const artifactLimit = (a: Artifact): number => (a.role === "migrations" ? MIGRATIONS_LIMIT : WORKER_LIMIT);
+
+/**
+ * Refuse a release by what its manifest declares, before any artifact is fetched: how many, how
+ * large each, how large together. The bytes read later are held to the declared size (readCapped),
+ * so a Worker never buffers more than this — its memory is 128 MB.
+ */
+export function checkArtifactSizes(artifacts: Artifact[]): void {
+  if (artifacts.length > MAX_ARTIFACTS) throw new Error("release carries too many artifacts");
+  let total = 0;
+  for (const a of artifacts) {
+    if (a.size > artifactLimit(a)) throw new Error(`${a.name} is too large`);
+    total += a.size;
+  }
+  if (total > TOTAL_LIMIT) throw new Error("release is too large");
+}
+
+/**
+ * Read a body, stopping as soon as it passes `limit` bytes (a missing or false Content-Length, an
+ * oversized answer, or a gzip that expands too far all end here, without reading the rest).
+ */
+export async function readCapped(body: ReadableStream<Uint8Array> | null, limit: number, what: string): Promise<Uint8Array> {
+  if (!body) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let n = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    n += value.byteLength;
+    if (n > limit) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`${what} is larger than expected`);
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(n);
+  let at = 0;
+  for (const c of chunks) { out.set(c, at); at += c.byteLength; }
+  return out;
+}
 const VERSION_KEY = "workerops:release:version";
 /**
  * A version that was deployed and then reverted (health or migrate failed).
@@ -227,6 +276,7 @@ export async function verifyManifest(env: Env, value: unknown, product: string):
       throw new Error("release artifact metadata is invalid");
     }
   }
+  checkArtifactSizes(manifest.artifacts);
   return manifest;
 }
 
@@ -238,7 +288,7 @@ export function verifyArtifactsSync(manifest: Manifest, files: Map<string, Uint8
     names.add(artifact.name);
     const data = files.get(artifact.name);
     if (!data) throw new Error(`${artifact.name} is missing`);
-    const limit = artifact.role === "migrations" ? MIGRATIONS_LIMIT : WORKER_LIMIT;
+    const limit = artifactLimit(artifact);
     if (data.byteLength !== artifact.size || data.byteLength > limit) throw new Error(`${artifact.name} size does not match`);
     if (sha.get(artifact.name) !== artifact.sha256) throw new Error(`${artifact.name} digest does not match`);
   }
@@ -339,7 +389,8 @@ export async function deploySignedRelease(
   if (current && !allowDowngrade && compareVersion(release.manifest.version, current) < 0) return response({ error: "release_downgrade" }, 409);
   // Rebuild puts the running version in again on purpose.
   if (current === release.manifest.version && !reinstall) return response({ ok: true, status: "already_current", version: current });
-  if (!await acquireLock(env, config.lockTtlMs)) return response({ error: "update_in_progress" }, 409);
+  const lock = await acquireLock(env, config.lockTtlMs);
+  if (!lock) return response({ error: "update_in_progress" }, 409);
 
   const client = new CfClient(config.token, config.accountId, config.appWorkerName, { max: config.retryMax, baseMs: config.retryBaseMs });
   try {
@@ -348,7 +399,8 @@ export async function deploySignedRelease(
     const fromVersion = await client.getActiveVersionId();
     const previousHealthVersion = (await probeHealth(env, config)).version ?? null;
     await setState(env, {
-      status: "pending", fromVersionId: fromVersion, lastGoodVersionId: fromVersion ?? (await getState(env)).lastGoodVersionId,
+      status: "pending", fromVersionId: fromVersion,
+      ...(fromVersion ? { lastGoodVersionId: fromVersion, lastGoodRelease: current } : {}),
       toVersionId: null, prevAppVersion: previousHealthVersion, intendedRelease: release.manifest.version,
       startedAt: nowIso(), deployedAt: null, confirmedAt: null, finishedAt: null, error: null,
     });
@@ -383,7 +435,7 @@ export async function deploySignedRelease(
         await env.WORKEROPS_STATE.put(failedKey(release.manifest.version), JSON.stringify({ at: nowIso(), error: trial.error }));
         await appendEvent(env, "trial", "fail", trial.error);
         await setState(env, { status: "failed_predeploy", finishedAt: nowIso(), error: trial.error });
-        await releaseLock(env);
+        await releaseLock(env, lock);
         return response({ error: "trial_failed", detail: trial.error }, 502);
       }
       await appendEvent(env, "trial", "ok", `${release.manifest.version} answered at 0%`);
@@ -394,18 +446,19 @@ export async function deploySignedRelease(
     ctx.waitUntil((async () => {
       try {
         const deadline = Date.now() + config.healthWindowMs;
-        let healthy = false;
+        // Only an answer that names the version just deployed counts (health.ts answeredBy):
+        // the old version's ok must not confirm the new one.
+        let seen = false;
         while (Date.now() < deadline) {
           const result = await probeHealth(env, config);
-          healthy ||= result.ok;
-          if (result.version !== undefined && previousHealthVersion !== null && result.version !== previousHealthVersion) {
+          if (answeredBy(result, release.manifest.version) === "new") {
             if (!result.ok) throw new Error("new release health check failed");
-            healthy = true;
+            seen = true;
             break;
           }
           await sleep(config.healthIntervalMs);
         }
-        if (!healthy) throw new Error("new release did not become healthy");
+        if (!seen) throw new Error("new release was not observed (no health answer named it)");
         if (config.migratePath) {
           await appendEvent(env, "migrate", "run", config.migratePath);
           if (!await runMigrate(env, config)) throw new Error("migrate failed");
@@ -413,22 +466,25 @@ export async function deploySignedRelease(
         }
         await env.WORKEROPS_STATE.put(VERSION_KEY, release.manifest.version);
         await appendEvent(env, "confirm", "ok", versionId);
-        await setState(env, { status: "confirmed", lastGoodVersionId: versionId, confirmedAt: nowIso(), finishedAt: nowIso(), error: null });
+        await setState(env, { status: "confirmed", lastGoodVersionId: versionId, lastGoodRelease: release.manifest.version, confirmedAt: nowIso(), finishedAt: nowIso(), error: null });
         await keepGoodCode(env, config, versionId);
       } catch (error) {
-        if (fromVersion) await restoreVersion(env, client, fromVersion, `WorkerOps auto-revert ${release.manifest.version}`, config.bindingTypes);
+        // Not back to a revoked release (billing-operations 5.3節): a person decides then.
+        const back = fromVersion && !(await revokedTarget(env, config.productId, current).catch(() => false)) ? fromVersion : null;
+        if (back) await restoreVersion(env, client, back, `WorkerOps auto-revert ${release.manifest.version}`, config.bindingTypes);
         await env.WORKEROPS_STATE.put(failedKey(release.manifest.version), JSON.stringify({ at: nowIso(), error: errMsg(error) }));
         await appendEvent(env, "verify", "fail", errMsg(error));
-        await setState(env, { status: fromVersion ? "reverted" : "manual_required", finishedAt: nowIso(), error: errMsg(error) });
+        const why = fromVersion && !back ? `${errMsg(error)}; previous release ${current} is revoked` : errMsg(error);
+        await setState(env, { status: back ? "reverted" : "manual_required", finishedAt: nowIso(), error: why });
       } finally {
-        await releaseLock(env);
+        await releaseLock(env, lock);
       }
     })());
     return response({ ok: true, status: "deployed_unverified", version: release.manifest.version }, 202);
   } catch (error) {
     await appendEvent(env, "signed_release", "fail", errMsg(error)).catch(() => {});
     await setState(env, { status: "failed_predeploy", finishedAt: nowIso(), error: errMsg(error) }).catch(() => {});
-    await releaseLock(env);
+    await releaseLock(env, lock);
     return response({ error: "release_deploy_failed" }, 502);
   }
 }

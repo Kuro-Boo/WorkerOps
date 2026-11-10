@@ -56,9 +56,9 @@ const main = async () => {
     const { acquireLock } = await import("./state");
     const realNow = Date.now;
     Date.now = () => realNow() + 3 * 60 * 1000;
-    eq("鍵: 番人の操作(2 分)は、app の 5 分の鍵を 3 分では取れない", await acquireLock(env, 120_000), false);
+    eq("鍵: 番人の操作(2 分)は、app の 5 分の鍵を 3 分では取れない", !!(await acquireLock(env, 120_000)), false);
     Date.now = () => realNow() + 6 * 60 * 1000;
-    eq("鍵: 鍵の期間を過ぎれば取れる", await acquireLock(env, 120_000), true);
+    eq("鍵: 鍵の期間を過ぎれば取れる", !!(await acquireLock(env, 120_000)), true);
     Date.now = realNow;
   }
   {
@@ -74,6 +74,23 @@ const main = async () => {
   {
     const { env } = fakeEnv({ "workerops:state": state("confirmed") });
     eq("hold: 確定済みなら取れる", await peerHold(env, 60_000), { ok: true });
+  }
+  {
+    // 鍵は持ち主だけが返す(課題 2f8296b2)。遅れて終わった操作や app の release が、別の操作の鍵を消さない。
+    const { env, store } = fakeEnv();
+    const { acquireLock, releaseLock } = await import("./state");
+    const first = await acquireLock(env, 120_000);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 3 * 60 * 1000;
+    const second = await acquireLock(env, 120_000);
+    Date.now = realNow;
+    eq("鍵: 期限切れの後は別の操作が取れる", !!second && second !== first, true);
+    await releaseLock(env, first!);
+    eq("鍵: 期限切れの元の持ち主の release は、次の持ち主の鍵を消さない", store.has("workerops:lock"), true);
+    await peerRelease(env);
+    eq("鍵: app の release は番人の操作の鍵を消さない", store.has("workerops:lock"), true);
+    await releaseLock(env, second!);
+    eq("鍵: 持ち主の release で消える", store.has("workerops:lock"), false);
   }
   if (failed) {
     console.log(`\n${failed} 件失敗`);

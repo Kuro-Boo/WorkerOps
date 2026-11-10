@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 import type { Config } from "./config";
-import { LOCK_KEY, acquireLock, getState, releaseLock, type UpdateStatus } from "./state";
+import { LOCK_KEY, acquireLock, getState, releaseKind, type UpdateStatus } from "./state";
 import { WORKEROPS_VERSION } from "./version";
 import { getRestart, restartEnabled, type RestartRecord } from "./restart";
 
@@ -41,6 +41,9 @@ export interface PeerStatus {
 export type HoldResult = { ok: true } | { ok: false; reason: "update_in_progress" | "busy" };
 
 /** Upper bound on a hold: the lock always expires, even if the app never comes back. */
+/** The app's hold is released by a separate call: it is let go by kind, never another operation's lock. */
+const PEER = "peer";
+
 export const HOLD_MAX_MS = 10 * 60 * 1000;
 const HOLD_MIN_MS = 60 * 1000;
 
@@ -66,10 +69,10 @@ export async function peerHold(env: Env, ttlMs: unknown): Promise<HoldResult> {
   if (st.status === "pending" || st.status === "deployed_unverified") return { ok: false, reason: "update_in_progress" };
   const n = typeof ttlMs === "number" && Number.isFinite(ttlMs) ? ttlMs : HOLD_MAX_MS;
   const ttl = Math.min(HOLD_MAX_MS, Math.max(HOLD_MIN_MS, n));
-  if (!(await acquireLock(env, ttl))) return { ok: false, reason: "busy" };
+  if (!(await acquireLock(env, ttl, PEER))) return { ok: false, reason: "busy" };
   return { ok: true };
 }
 
 export async function peerRelease(env: Env): Promise<void> {
-  await releaseLock(env);
+  await releaseKind(env, PEER);
 }
