@@ -43,10 +43,15 @@ export async function runTick(
 ): Promise<TickResult> {
   const guardian = !opts.everyMinute || guardianMinute(at);
   if (guardian) {
-    ctx.waitUntil(watchdogTick(env, config).catch(() => {}));
-    ctx.waitUntil(autoUpdateTick(env, ctx, config).catch(() => {}));
-    // After the watchdog has had its say about an update (restart.ts leaves updates alone).
-    ctx.waitUntil(restartTick(env, config).catch(() => "off"));
+    // One after another, not side by side: each takes the guardian's lock, and two takes started in the
+    // same moment could both read it free (KV has no compare-and-swap). The watchdog settles a left-over
+    // update first, the update check starts a new one only then, and the restart watch comes last
+    // (restart.ts leaves updates alone).
+    ctx.waitUntil((async () => {
+      await watchdogTick(env, config).catch(() => {});
+      await autoUpdateTick(env, ctx, config).catch(() => {});
+      await restartTick(env, config).catch(() => "off");
+    })());
   }
   if (!appTicks(env)) return { guardian, app: "off" };
   const app = env.APP_SERVICE as unknown as AppMinute;
