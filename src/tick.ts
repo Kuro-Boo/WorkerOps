@@ -18,6 +18,7 @@ import { watchdogTick } from "./orchestrator";
 import { autoUpdateTick } from "./release-ops";
 import { restartTick } from "./restart";
 import { followTick } from "./follow";
+import { placementTick } from "./placement";
 
 export type AppTick = "ok" | "off" | "error";
 
@@ -53,6 +54,7 @@ export async function runTick(
       await autoUpdateTick(env, ctx, config).catch(() => {});
       await restartTick(env, config).catch(() => "off");
       await followTick(env, config).catch(() => "off");
+      await placementTick(env, config).catch(() => "off");
     })());
   }
   if (!appTicks(env)) return { guardian, app: "off" };

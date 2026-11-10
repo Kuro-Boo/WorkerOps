@@ -1,4 +1,5 @@
 import { fetchRetry, type RetryOptions } from "./retry";
+import { placementOfD1 } from "./placement-map";
 
 const CF_BASE = "https://api.cloudflare.com/client/v4";
 
@@ -93,13 +94,18 @@ export class CfClient {
 
   /**
    * Current script bindings, compatibility settings and placement (to preserve on redeploy).
-   * `region` (the signed release's placement_region) wins over the Worker's current placement.
+   * A Worker runs next to its D1 when the D1 can be located (2026-11-11, the owner's decision); else in
+   * `region` (the signed release's placement_region); else where it runs now.
    */
   async getSettings(region?: unknown): Promise<{
     bindings: unknown[];
     compatibility_date: string;
     compatibility_flags: string[];
     placement?: Placement;
+    /** The placement is the one next to the app's D1. */
+    fromD1: boolean;
+    /** The Worker's placement mode now ("smart", "targeted" or none). */
+    currentMode?: string;
   }> {
     const res = await fetchRetry(
       `${this.base}/settings`,
@@ -112,15 +118,43 @@ export class CfClient {
       compatibility_flags?: string[];
       placement?: { mode?: string } | null;
     }>(res, "getSettings");
-    const placement = typeof region === "string" && PLACEMENT_REGION.test(region)
+    const nextToD1 = await this.placementNextToD1(r.bindings ?? []);
+    const placement = nextToD1 ?? (typeof region === "string" && PLACEMENT_REGION.test(region)
       ? { region }
-      : await this.keptPlacement(r.placement?.mode);
+      : await this.currentPlacement(r.placement?.mode));
     return {
       bindings: r.bindings ?? [],
       compatibility_date: r.compatibility_date ?? "2024-11-01",
       compatibility_flags: r.compatibility_flags ?? [],
       ...(placement ? { placement } : {}),
+      fromD1: !!nextToD1,
+      ...(r.placement?.mode ? { currentMode: r.placement.mode } : {}),
     };
+  }
+
+  /**
+   * The region next to the app's D1 primary: D1 answers which location served a query. Best effort: a
+   * token without D1 access, or a D1 that does not answer, must not stop an update or a revert.
+   */
+  private async placementNextToD1(bindings: unknown[]): Promise<Placement | undefined> {
+    const d1s = bindings.filter((b) => (b as { type?: string })?.type === "d1") as Array<{ name?: string; id?: string; database_id?: string }>;
+    const d1 = d1s.find((b) => b.name === "DB") ?? d1s[0];
+    const id = d1?.id ?? d1?.database_id;
+    if (!id) return undefined;
+    try {
+      const res = await fetchRetry(`${this.account}/d1/database/${encodeURIComponent(id)}/query`, {
+        method: "POST",
+        headers: { ...this.auth(), "content-type": "application/json" },
+        body: JSON.stringify({ sql: "SELECT 1" }),
+      }, this.retry);
+      const r = await this.parse<Array<{ meta?: { served_by_colo?: string; served_by_region?: string; served_by_primary?: boolean } }>>(res, "d1Location");
+      const meta = r[0]?.meta;
+      const region = placementOfD1(meta?.served_by_primary === false ? undefined : meta?.served_by_colo, meta?.served_by_region);
+      return region ? { region } : undefined;
+    } catch (e) {
+      console.warn("placement: could not locate the D1", this.scriptName, e);
+      return undefined;
+    }
   }
 
   /**
@@ -128,7 +162,7 @@ export class CfClient {
    * only as a bare id (`target: [12]`), which an upload rejects (10021); the script list has its name.
    * Best effort: a revert must not stop because the list could not be read.
    */
-  private async keptPlacement(mode: string | undefined): Promise<Placement | undefined> {
+  async currentPlacement(mode: string | undefined): Promise<Placement | undefined> {
     if (mode === "smart") return { mode: "smart" };
     if (mode !== "targeted") return undefined;
     try {
