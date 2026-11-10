@@ -141,6 +141,7 @@ With `APP_RESTART=1`, WorkerOps also deploys the serving version again when the 
 | `HEALTH_OK_STATES` | var | Extra health states that count as healthy, e.g. `ok,degraded` |
 | `TRIAL_BEFORE_DEPLOY` | var | `1`: try a new version at 0% before sending it traffic |
 | `APP_RESTART` | var | `1`: restart the app when its health fails |
+| `FOLLOW_SERVING` | var | `1`: for a guardian with no release source (the app's versions come from elsewhere), keep the revert target on the version that serves all traffic once it answered healthy on two ticks in a row |
 | `APP_TICK` | var | `1`: the app runs its scheduled work on the guardian's cron (`tick`), so it needs no cron of its own |
 | `DEFECTS` | var | `off` stops failure reports (below) |
 | `RETRY_MAX`, `REVERT_RETRY_MAX`, `HEALTH_WINDOW_MS`, … | var | Tunables (3, 5, 45 s, …) |

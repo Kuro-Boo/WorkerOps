@@ -107,8 +107,11 @@ export class CfClient {
     };
   }
 
-  /** The version_id currently serving 100% of traffic (best-effort). */
-  async getActiveVersionId(): Promise<string | null> {
+  /**
+   * The version_id currently serving 100% of traffic (best-effort). With `whole`, null unless one
+   * version has all of it (a split deployment has no single serving version — follow.ts).
+   */
+  async getActiveVersionId(whole = false): Promise<string | null> {
     const res = await fetchRetry(
       `${this.base}/deployments`,
       { headers: this.auth() },
@@ -126,7 +129,7 @@ export class CfClient {
     const versions = latest?.versions;
     if (!Array.isArray(versions) || versions.length === 0) return null;
     const active =
-      versions.find((v) => v.percentage === 100) ?? versions[0];
+      versions.find((v) => v.percentage === 100) ?? (whole ? undefined : versions[0]);
     return active?.version_id ?? null;
   }
 

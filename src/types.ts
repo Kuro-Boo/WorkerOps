@@ -79,6 +79,8 @@ export interface Env {
    * version is deployed again, once per incident. Unset: the guardian only rolls back fresh updates.
    */
   APP_RESTART?: string;
+  /** "1": with no release source, record the serving version as last-good once it answers healthy (follow.ts). */
+  FOLLOW_SERVING?: string;
   /** "off" stops failure reports to Entamy Defects (sent by default). */
   DEFECTS?: string;
   /**

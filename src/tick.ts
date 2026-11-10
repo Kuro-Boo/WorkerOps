@@ -17,6 +17,7 @@ import type { Env } from "./types";
 import { watchdogTick } from "./orchestrator";
 import { autoUpdateTick } from "./release-ops";
 import { restartTick } from "./restart";
+import { followTick } from "./follow";
 
 export type AppTick = "ok" | "off" | "error";
 
@@ -45,12 +46,13 @@ export async function runTick(
   if (guardian) {
     // One after another, not side by side: each takes the guardian's lock, and two takes started in the
     // same moment could both read it free (KV has no compare-and-swap). The watchdog settles a left-over
-    // update first, the update check starts a new one only then, and the restart watch comes last
-    // (restart.ts leaves updates alone).
+    // update first, the update check starts a new one only then, then the restart watch
+    // (restart.ts leaves updates alone), and last the follow of a guardian that brings no versions itself.
     ctx.waitUntil((async () => {
       await watchdogTick(env, config).catch(() => {});
       await autoUpdateTick(env, ctx, config).catch(() => {});
       await restartTick(env, config).catch(() => "off");
+      await followTick(env, config).catch(() => "off");
     })());
   }
   if (!appTicks(env)) return { guardian, app: "off" };
