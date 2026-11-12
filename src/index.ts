@@ -6,7 +6,9 @@ import { runTick } from "./tick";
 import { publishAssets, type AssetFile, type AssetSource, type PublishResult } from "./assets";
 import { askedRestart, type AskedRestart } from "./restart";
 import { peerHold, peerRelease, peerStatus, type HoldResult, type PeerStatus } from "./peer";
-import { LAST_AUTO_CHECK_KEY } from "./release-ops";
+import { applyRelease, LAST_AUTO_CHECK_KEY, resolveConfig } from "./release-ops";
+import { rebindApp, type RebindChanges, type RebindResult } from "./rebind";
+import { OpsError } from "./util";
 import { forApp } from "./trial";
 
 /**
@@ -51,6 +53,32 @@ export class WorkerOpsAssets extends WorkerEntrypoint<Env> {
   async recheck(): Promise<{ ok: true }> {
     await this.env.WORKEROPS_STATE.delete(LAST_AUTO_CHECK_KEY);
     return { ok: true };
+  }
+
+  /**
+   * The app asks for a version (its admin's "update now", or the release script naming the version just
+   * published): the guardian fetches, verifies and puts it out like any other update — next to the D1,
+   * confirmed by the app's health and reverted if it does not answer (2026-11-12: the app no longer uploads
+   * itself). Without a version, the version the app's channel offers. 202 deployed_unverified means it is out
+   * and being checked; the app reads how it ended from its own version.
+   */
+  async update(version?: string): Promise<{ ok: boolean; status: string; version?: string; error?: string; detail?: string; httpStatus: number }> {
+    // The product comes from PRODUCT_ID, or else from the app's own health declaration (resolveConfig).
+    const config = await resolveConfig(this.env, loadConfig(this.env));
+    if (!config.productId) return { ok: false, status: "not_configured", error: "not_configured", httpStatus: 404 };
+    try {
+      const res = await applyRelease(this.env, this.ctx, config, typeof version === "string" && version ? version : undefined, false, true);
+      const body = (await res.json().catch(() => ({}))) as { ok?: boolean; status?: string; version?: string; error?: string; detail?: string };
+      return { ok: res.ok, status: body.status ?? body.error ?? "unknown", ...body, httpStatus: res.status };
+    } catch (e) {
+      if (e instanceof OpsError) return { ok: false, status: e.code, error: e.code, detail: e.message, httpStatus: e.status };
+      throw e;
+    }
+  }
+
+  /** The app changes some of its own settings values (rebind.ts): the guardian puts the serving code out with them. */
+  async rebind(changes: RebindChanges): Promise<RebindResult> {
+    return rebindApp(this.env, loadConfig(this.env), changes ?? {});
   }
 
   /** The app asks to be restarted (an operator's button in its admin screen): the serving version goes out again (restart.ts). */
