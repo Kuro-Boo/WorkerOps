@@ -215,10 +215,10 @@ eq("25 MiB を超えるファイル", validateManifest({ "/a": { hash: h("a"), s
   ] }));
   eq("版の名指しが勝ち、一覧は読まない", await settingsOf({ mode: "smart" }, named, "aws:ap-northeast-3"), { placement: { region: "aws:ap-northeast-3" }, urls: 1 });
   eq("smart はそのまま引き継ぐ", await settingsOf({ mode: "smart" }, named), { placement: { mode: "smart" }, urls: 1 });
-  eq("指定なしは付けない", await settingsOf({}, named), { placement: undefined, urls: 1 });
+  eq("指定なしは東京", await settingsOf({}, named), { placement: { region: "aws:ap-northeast-1" }, urls: 1 });
   eq("番号しか返らない地域は一覧から名前を引く", await settingsOf({ mode: "targeted", target: [12] }, named), { placement: { region: "aws:ap-northeast-1" }, urls: 2 });
-  eq("形の違う名指しは使わない", await settingsOf({}, named, "tokyo"), { placement: undefined, urls: 1 });
-  eq("一覧が読めなくても配備は止めない", await settingsOf({ mode: "targeted", target: [12] }, () => new Response("x", { status: 500 })), { placement: undefined, urls: 2 });
+  eq("形の違う名指しは使わない(東京)", await settingsOf({}, named, "tokyo"), { placement: { region: "aws:ap-northeast-1" }, urls: 1 });
+  eq("一覧が読めなくても配備は止めない(東京)", await settingsOf({ mode: "targeted", target: [12] }, () => new Response("x", { status: 500 })), { placement: { region: "aws:ap-northeast-1" }, urls: 2 });
 }
 
 if (failed) {

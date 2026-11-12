@@ -20,7 +20,7 @@ const eq = (name: string, got: unknown, want: unknown) => {
 const config = { lockTtlMs: 120_000, retryMax: 1, retryBaseMs: 1, appWorkerName: "app", accountId: "a", token: "t", bindingTypes: null } as unknown as Config;
 const TOKYO = { region: "aws:ap-northeast-1" };
 
-function setup(o: { status?: string; follow?: boolean; checked?: boolean; lock?: boolean; fromD1?: boolean; now?: unknown; uploadFails?: boolean } = {}) {
+function setup(o: { status?: string; follow?: boolean; checked?: boolean; lock?: boolean; fromD1?: boolean; fromDefault?: boolean; now?: unknown; uploadFails?: boolean } = {}) {
   const store = new Map<string, string>();
   const ttl = new Map<string, number | undefined>();
   store.set("workerops:state", JSON.stringify({ events: [], status: o.status ?? "idle", lastGoodVersionId: "v1" }));
@@ -36,7 +36,8 @@ function setup(o: { status?: string; follow?: boolean; checked?: boolean; lock?:
   const client = (): PlacementClient => ({
     getSettings: async () => ({
       bindings: [{ type: "d1", name: "DB", id: "x" }, { type: "secret_text", name: "S" }], compatibility_date: "d", compatibility_flags: [],
-      fromD1: o.fromD1 !== false, ...(o.fromD1 !== false ? { placement: TOKYO } : {}), currentMode: "targeted",
+      fromD1: o.fromD1 !== false, ...(o.fromD1 !== false || o.fromDefault ? { placement: TOKYO } : {}),
+      ...(o.fromDefault ? { fromDefault: true } : {}), currentMode: "targeted",
     }),
     currentPlacement: async () => o.now as never,
     uploadModules: async (_c, bindings, _d, _f, assets, placement) => {
@@ -80,6 +81,11 @@ const main = async () => {
     eq("D1 が無ければ何もしない", await placementTick(s.env, config, s.client), "no_d1");
     eq("配らない", s.calls.deployed, undefined);
   }
+  {
+    const s = setup({ fromD1: false, fromDefault: true });
+    eq("D1 の場所が分からず、どこにも置かれていなければ既定の場所(東京)へ", await placementTick(s.env, config, s.client), "moved");
+    eq("既定の場所を渡す", s.calls.placement, TOKYO);
+  }
   for (const [name, o, want] of [
     ["更新の途中は触らない", { status: "deployed_unverified" }, "busy"],
     ["戻して止まっている時は触らない", { status: "manual_required" }, "busy"],
@@ -117,6 +123,7 @@ const main = async () => {
 
   eq("番人の束縛で D1 が読めれば API を使わない", await settingsOf(db, () => new Response("x", { status: 403 }), undefined, async () => ({ served_by_colo: "SIN" })), [{ region: "aws:ap-southeast-1" }, true]);
   eq("束縛で分からなければ API で読む", await settingsOf(db, sin, undefined, async () => ({})), [{ region: "aws:ap-southeast-1" }, true]);
+  eq("D1 も名指しも今の置き場所も無ければ東京", await settingsOf(db, () => new Response("x", { status: 403 })), [TOKYO, false]);
 
   if (failed) {
     console.log(`\n${failed} failed`);

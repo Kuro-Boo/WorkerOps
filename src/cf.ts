@@ -24,6 +24,8 @@ export interface VersionAssets {
  */
 export type Placement = { region: string } | { mode: "smart" };
 const PLACEMENT_REGION = /^(aws|gcp|azure):[a-z0-9-]{2,40}$/;
+/** Where a Worker runs when nothing names a place (see getSettings). */
+export const DEFAULT_PLACEMENT: Placement = { region: "aws:ap-northeast-1" };
 
 const regionOf = (m: D1Location | undefined) =>
   placementOfD1(m?.served_by_primary === false ? undefined : m?.served_by_colo, m?.served_by_region);
@@ -98,7 +100,10 @@ export class CfClient {
   /**
    * Current script bindings, compatibility settings and placement (to preserve on redeploy).
    * A Worker runs next to its D1 when the D1 can be located (2026-11-11, the owner's decision); else in
-   * `region` (the signed release's placement_region); else where it runs now.
+   * `region` (the signed release's placement_region); else where it runs now; and a Worker placed nowhere
+   * runs in Tokyo (2026-11-12, the owner's decision: "prefer Osaka or Tokyo when the place is unknown").
+   * Unplaced, a Worker runs at whichever edge took the request, which from Japan was often San Jose, far
+   * from a D1 in Japan.
    */
   async getSettings(region?: unknown, appD1?: () => Promise<D1Location | undefined>): Promise<{
     bindings: unknown[];
@@ -107,6 +112,8 @@ export class CfClient {
     placement?: Placement;
     /** The placement is the one next to the app's D1. */
     fromD1: boolean;
+    /** Nothing named a place, so the placement is the default one (DEFAULT_PLACEMENT). */
+    fromDefault?: boolean;
     /** The Worker's placement mode now ("smart", "targeted" or none). */
     currentMode?: string;
   }> {
@@ -122,15 +129,17 @@ export class CfClient {
       placement?: { mode?: string } | null;
     }>(res, "getSettings");
     const nextToD1 = await this.placementNextToD1(r.bindings ?? [], appD1);
-    const placement = nextToD1 ?? (typeof region === "string" && PLACEMENT_REGION.test(region)
+    const named = nextToD1 ?? (typeof region === "string" && PLACEMENT_REGION.test(region)
       ? { region }
       : await this.currentPlacement(r.placement?.mode));
+    const placement = named ?? DEFAULT_PLACEMENT;
     return {
       bindings: r.bindings ?? [],
       compatibility_date: r.compatibility_date ?? "2024-11-01",
       compatibility_flags: r.compatibility_flags ?? [],
       ...(placement ? { placement } : {}),
       fromD1: !!nextToD1,
+      ...(named ? {} : { fromDefault: true }),
       ...(r.placement?.mode ? { currentMode: r.placement.mode } : {}),
     };
   }

@@ -1,5 +1,6 @@
 /**
- * Keeps the app next to its D1 (2026-11-11, the owner's decision).
+ * Keeps the app next to its D1 (2026-11-11, the owner's decision); when the D1 cannot be located and the
+ * app is placed nowhere, puts it in the default place (cf.ts DEFAULT_PLACEMENT).
  *
  * The placement is part of each version, and a Worker placed far from its D1 crosses the distance on
  * every query. An update places the version (cf.ts); this also moves apps that have no update coming:
@@ -56,7 +57,8 @@ export async function placementTick(
     if (updating(st.status)) return "busy";
     const cf = client(config);
     const settings = await cf.getSettings(undefined, () => appD1Location(env));
-    if (!settings.fromD1 || !settings.placement) {
+    // An app placed nowhere goes to the default place; one the owner placed stays where it is.
+    if ((!settings.fromD1 && !settings.fromDefault) || !settings.placement) {
       await checked(CHECK_EVERY_S);
       return "no_d1";
     }
@@ -76,7 +78,7 @@ export async function placementTick(
     );
     const where = "region" in want ? want.region : want.mode;
     await cf.deployVersion(versionId, `WorkerOps placement ${where}`);
-    await appendEvent(env, "placement", "ok", `next to its D1: ${where}`);
+    await appendEvent(env, "placement", "ok", settings.fromD1 ? `next to its D1: ${where}` : `D1 not located, default: ${where}`);
     // The same code as the last-good one, so a revert should land on this version (as in assets.ts).
     await setState(env, { lastGoodVersionId: versionId });
     await keepGoodCode(env, config, versionId);
