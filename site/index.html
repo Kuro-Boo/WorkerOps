@@ -166,7 +166,7 @@
     <h2 data-i18n="start.title">はじめ方</h2>
     <p class="sub" data-i18n="start.sub">WorkerOps を app の前段に置き、app の公開ルートを WorkerOps に向けます。</p>
     <ol class="steps">
-      <li data-i18n="start.1"><code>wrangler.toml</code> を設定する —— 状態の KV(<code>WORKEROPS_STATE</code>)、前段にする app(<code>APP_SERVICE</code>)、<code>CF_ACCOUNT_ID</code>、<code>RELEASE_SOURCE</code>、<code>HEALTH_PATH</code>、公開ルート。</li>
+      <li data-i18n="start.1"><code>wrangler.toml</code> を設定する —— 状態の KV(<code>WORKEROPS_STATE</code>)、前段にする app(<code>APP_SERVICE</code>)、<code>CF_ACCOUNT_ID</code>、<code>APP_WORKER_NAME</code>、<code>HEALTH_PATH</code>(版を配布基盤から取るなら <code>PRODUCT_ID</code>)、公開ルート。</li>
       <li data-i18n="start.2">Secret を入れる:</li>
     </ol>
 <pre><code>wrangler secret put CF_API_TOKEN       # Workers Scripts:Edit + KV:Edit
@@ -229,7 +229,7 @@ curl -X POST -H "Authorization: Bearer $WORKER_OPS_TOKEN" \
     'contract.health': 'Return <code>200 {ok:true, version}</code>. Used to judge liveness and the running version.',
     'contract.migrate': 'Apply pending migrations (implemented by apps that own a DB; additive-only and backward compatible).',
     'start.title': 'Get started', 'start.sub': 'Place WorkerOps in front of your app and point the app’s public route at WorkerOps.',
-    'start.1': 'Configure <code>wrangler.toml</code> — the state KV (<code>WORKEROPS_STATE</code>), the app to front (<code>APP_SERVICE</code>), <code>CF_ACCOUNT_ID</code>, <code>RELEASE_SOURCE</code>, <code>HEALTH_PATH</code> and the public route.',
+    'start.1': 'Configure <code>wrangler.toml</code> — the state KV (<code>WORKEROPS_STATE</code>), the app to front (<code>APP_SERVICE</code>), <code>CF_ACCOUNT_ID</code>, <code>APP_WORKER_NAME</code>, <code>HEALTH_PATH</code> (and <code>PRODUCT_ID</code> to take versions from the distribution endpoint) and the public route.',
     'start.2': 'Put the secrets:', 'start.3': 'Deploy. On the app side, implement the contract above (<code>GET {HEALTH_PATH}</code>).',
     'api.title': 'REST API (for AI & automation)',
     'api.note': 'update / reinstall answer right away; verification, confirmation and auto-revert continue in the background. Check the outcome in state.status of /api/v1/status.',

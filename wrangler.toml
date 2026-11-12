@@ -22,18 +22,12 @@ crons = ["*/2 * * * *"]
 OPS_PATH = "/__workerops__"
 HEALTH_PATH = "/health"
 # MIGRATE_PATH = "/migrate"          # optional: app endpoint to run one-shot/migrations
-RELEASE_SOURCE = "owner/repo"        # GitHub repo holding the app's worker.js release
-RELEASE_ASSET = "worker.js"
+# PRODUCT_ID = "your-product"          # product at the release distribution endpoint (update.entamy.com).
+#   Unset: read from the app's /health product_id. Without either, WorkerOps only watches and reverts.
 APP_WORKER_NAME = "your-app-worker"  # the app Worker script WorkerOps updates/reverts
 CF_ACCOUNT_ID = "replace-with-account-id"
-# ── 自己更新（guardian が自分自身を新しい WorkerOps に入れ替える）──────
-# OPS_WORKER_NAME = "your-guardian-worker"  # ★ この guardian 自身の Worker 名。
-#   未設定なら自己更新は無効。自分の名前を知らない guardian に自分を書き換え
-#   させないための、意図的に安全側の既定（壊れた版に入れ替わると復旧コンソール
-#   ごと失われ、内側から戻す手段が無くなる）。
-#   版は配布基盤(update)の workerops から取る(GitHub は読まない)。
-# SELF_UPDATE_INTERVAL_MS = "10800000"          # 既定 3h（±10% のジッター付き）
-# SELF_UPDATE = "0"                             # 明示的に自己更新を止める
+# There is no self-update: the app replaces its guardian (WorkerOps is never asked to replace itself).
+# OPS_WORKER_NAME = "your-guardian-worker"  # this guardian's own name; only names the install in failure reports
 # DEFECTS = "off"                              # 失敗の知らせ(Entamy Defects)を止める
 
 # Optional tunables: RETRY_MAX, RETRY_BASE_MS, REVERT_RETRY_MAX,
