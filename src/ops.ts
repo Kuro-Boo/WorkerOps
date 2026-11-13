@@ -58,7 +58,7 @@ export async function handleOps(
 
   // Unless the screen is switched on (secret OPS_SCREEN=on, customer installs), show nothing
   // without the token — not the page, not the status. 404, not 401: do not tell that a guardian
-  // is here. /api/v1/health stays open (version only; the app checks it after replacing the guardian).
+  // is here. /api/v1/health stays open (liveness only; the version needs the token).
   // Decided before anything else runs: a request that is turned away must not reach the app
   // (resolveConfig below may ask the app's health).
   if (!loaded.opsScreen && sub !== "/api/v1/health" && !authed) {
@@ -94,16 +94,20 @@ export async function handleOps(
       ]);
       const restart = restartEnabled(env) ? await getRestart(env).catch(() => null) : null;
       // Without the token, the words of a failure stay inside: error texts carry what the
-      // Cloudflare API and the database answered (names of tables, of bindings). What happened —
-      // the status word, each step and whether it passed, versions, counts — is still shown.
+      // Cloudflare API and the database answered (names of tables, of bindings). Versions stay
+      // inside too (2026-11-13): a version tells an attacker which known flaw to aim at. What
+      // happened — the status word, each step and whether it passed, counts — is still shown.
       const shown = full ? { state, restart, assets } : {
         state: {
           ...state, error: null, lastAutoRevertReason: null,
+          lastGoodVersionId: null, lastGoodRelease: null, fromVersionId: null, toVersionId: null,
+          prevAppVersion: null, intendedRelease: null,
           events: state.events.map(({ detail: _detail, ...e }) => e),
         },
         restart: restart ? { ...restart, lastReason: null } : restart,
-        assets: assets ? { ...assets, error: null } : assets,
+        assets: assets ? { ...assets, error: null, versionId: null } : assets,
       };
+      const { version: _appVersion, ...healthWithoutVersion } = health as { version?: string };
       return jsonResponse({
         app: {
           workerName: config.appWorkerName,
@@ -126,9 +130,9 @@ export async function handleOps(
         detail: authed ? "all" : "token_required",
         // The guardian does not replace itself: the app it fronts updates it
         // (cms-workerops「番人の更新は app が行う」). It only names its version.
-        self: { version: WORKEROPS_VERSION },
+        self: { version: full ? WORKEROPS_VERSION : null },
         cf: { activeVersionId },
-        health,
+        health: full ? health : healthWithoutVersion,
         incidents,
         release,
       });
@@ -140,14 +144,15 @@ export async function handleOps(
     }
 
     // REST API liveness (for AI/external callers).
-    // ⚠ `version` is what the app checks after it replaced the guardian. Do not
-    //   remove it, and do not make this handler depend on anything that can
-    //   fail — it is also the app-independent liveness probe.
+    // ⚠ Do not make this handler depend on anything that can fail — it is also the
+    //   app-independent liveness probe. `version` is given to the token holder only
+    //   (2026-11-13): a version tells an attacker which known flaw to aim at. The app
+    //   reads the guardian's version over RPC (status()), not here.
     if (request.method === "GET" && sub === "/api/v1/health") {
       return jsonResponse({
         ok: true,
         service: "workerops",
-        version: WORKEROPS_VERSION,
+        ...(authed ? { version: WORKEROPS_VERSION } : {}),
       });
     }
 

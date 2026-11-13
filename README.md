@@ -81,8 +81,8 @@ Everything lives under `OPS_PATH` (default `/__workerops__`), so it never collid
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| GET | `/api/v1/health` | none | Guardian liveness and version |
-| GET | `/api/v1/status` | screen\* | App health and update state. With the token: also failure texts, active version, recent failures, offered release |
+| GET | `/api/v1/health` | none | Guardian liveness (the version only with the token) |
+| GET | `/api/v1/status` | screen\* | App health and update state. With the token: also versions, failure texts, active version, recent failures, offered release |
 | GET | `/api/v1/release` | token | Offered version on the channel, and whether it is newer |
 | GET | `/api/v1/auth-check` | token | Check a token without changing anything |
 | POST | `/api/v1/update` | token | Install the offered (or a named) version |

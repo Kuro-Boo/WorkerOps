@@ -3,6 +3,7 @@
 import { handleOps, maintenancePage } from "./ops";
 import { forApp, OVERRIDE_HEADER } from "./trial";
 import { sameSecret } from "./util";
+import { WORKEROPS_VERSION } from "./version";
 import { loadConfig } from "./config";
 import type { Env } from "./types";
 
@@ -93,7 +94,17 @@ eq("OPS_SCREEN=on: release は鍵が要る", (await get({ ...envOf("on"), PRODUC
   const text = await open.text();
   const body = JSON.parse(text) as { detail: string; state: { status: string; intendedRelease: string; events: Array<Record<string, unknown>> } };
   eq("公開の状態: 文は出ない", ["secret words", "no such table", "asset words", "why"].filter((w) => text.includes(w)), []);
-  eq("公開の状態: 状態・版・段と成否は出る", [body.detail, body.state.status, body.state.intendedRelease, body.state.events], ["token_required", "manual_required", "1.2.3", [{ at: "t", step: "migrate", state: "fail" }]]);
+  eq("公開の状態: 状態・段と成否は出る", [body.detail, body.state.status, body.state.events], ["token_required", "manual_required", [{ at: "t", step: "migrate", state: "fail" }]]);
+  // 版は鍵が要る(2026-11-13): 版が分かると、その版の既知の穴を狙われる。
+  eq("公開の状態: 版は出ない", ["1.2.3", "1.2.2", WORKEROPS_VERSION].filter((v) => text.includes(`"${v}"`)), []);
+  // 鍵のある読み取りは Cloudflare と配布基盤にも訊く。試験では外へ出さない。
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => { throw new Error("offline"); }) as typeof fetch;
+  const withToken = await (await get(env, "/api/v1/status", TOKEN)).json() as { state: { intendedRelease: string }; health: { version: string }; self: { version: string } };
+  globalThis.fetch = realFetch;
+  eq("鍵があれば版は出る", [withToken.state.intendedRelease, withToken.health.version, withToken.self.version], ["1.2.3", "1.2.2", WORKEROPS_VERSION]);
+  eq("health: 鍵が無ければ版は出ない", "version" in (await (await get(env, "/api/v1/health")).json() as object), false);
+  eq("health: 鍵があれば版が出る", (await (await get(env, "/api/v1/health", TOKEN)).json() as { version: string }).version, WORKEROPS_VERSION);
 }
 // 鍵の比較(課題 c8ec022f)。
 eq("同じ鍵", await sameSecret(TOKEN, TOKEN), true);
