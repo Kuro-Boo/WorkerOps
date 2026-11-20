@@ -10,6 +10,8 @@ import { applyRelease, LAST_AUTO_CHECK_KEY, resolveConfig } from "./release-ops"
 import { rebindApp, type RebindChanges, type RebindResult } from "./rebind";
 import { OpsError } from "./util";
 import { forApp } from "./trial";
+// D1・KV への読み書きは、失敗を前提に取り直す(store-retry)。入口と WorkerEntrypoint の組み立てで env を包む。
+import { retryingHandler, withRetryingStores } from "./store-retry";
 
 /**
  * The app hands its built pages to the guardian here (assets.ts). Reached only
@@ -22,6 +24,10 @@ import { forApp } from "./trial";
  *               to call back while this call runs
  */
 export class WorkerOpsAssets extends WorkerEntrypoint<Env> {
+  constructor(ctx: ExecutionContext, env: Env) {
+    super(ctx, withRetryingStores(env));
+  }
+
   async publish(
     manifest: Record<string, AssetFile>,
     read: AssetSource["read"],
@@ -87,7 +93,7 @@ export class WorkerOpsAssets extends WorkerEntrypoint<Env> {
   }
 }
 
-export default {
+export default retryingHandler({
   /** Front-of-app proxy + Ops endpoints. */
   async fetch(
     request: Request,
@@ -124,4 +130,4 @@ export default {
   ): Promise<void> {
     await runTick(env, ctx, loadConfig(env), event.scheduledTime, { everyMinute: event.cron === "* * * * *" });
   },
-};
+});
