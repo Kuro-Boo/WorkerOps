@@ -33,7 +33,7 @@
 export interface RetryOptions {
   /** 合計の試行回数(既定 4)。 */
   attempts?: number;
-  /** 最初の待ち(ms・既定 200)。 */
+  /** 最初の待ち(ms・既定 500。0.5 → 1 → 2 秒と倍に伸ばす・仕様 core-shared-parts)。 */
   baseMs?: number;
   /** 1 回の待ちの上限(ms・既定 2000)。 */
   maxMs?: number;
@@ -120,7 +120,7 @@ function errorKind(error: unknown): string {
  */
 export async function withStoreRetry<T>(label: string, op: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
   const attempts = Math.max(1, Math.min(8, options.attempts ?? 4));
-  const base = Math.max(0, options.baseMs ?? 200);
+  const base = Math.max(0, options.baseMs ?? 500);
   const max = Math.max(base, options.maxMs ?? 2000);
   const sleep = options.sleep ?? wait;
   const retryable = options.retryable ?? isTransientStoreError;

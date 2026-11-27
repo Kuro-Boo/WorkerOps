@@ -102,13 +102,27 @@ const main = async () => {
     eq("readCapped: 上限を超えたところで読むのをやめる", pulled <= 4, true);
   }
   const a = (name: string, size: number, role?: string) => ({ name, size, sha256: "0".repeat(64), ...(role ? { role } : {}) });
-  checkArtifactSizes([a("worker.js", 1024), a("migrations.json", 1024, "migrations")]);
+  const MiB = 1024 * 1024;
+  const m = (...artifacts: ReturnType<typeof a>[]) => ({ main_module: "worker.js", artifacts });
+  checkArtifactSizes(m(a("worker.js", 1024), a("migrations.json", 1024, "migrations")));
   eq("checkArtifactSizes: ふつうの版は通す", true, true);
-  await throws("checkArtifactSizes: 実行本体が 10 MiB を超えれば断る", () => checkArtifactSizes([a("worker.js", 10 * 1024 * 1024 + 1)]));
-  await throws("checkArtifactSizes: 移行が 5 MiB を超えれば断る", () => checkArtifactSizes([a("m.json", 5 * 1024 * 1024 + 1, "migrations")]));
-  await throws("checkArtifactSizes: 数が多すぎれば断る", () => checkArtifactSizes(Array.from({ length: 17 }, (_, i) => a(`f${i}`, 1))));
-  await throws("checkArtifactSizes: 合計が大きすぎれば断る", () => checkArtifactSizes(Array.from({ length: 3 }, (_, i) => a(`f${i}`, 10 * 1024 * 1024))));
-
+  // 2026-11-27: KuroCMS 2.1.15〜2.1.20 は管理画面の部品が増えて成果物が 22 個になり、数の上限(16)で断られた。
+  checkArtifactSizes(m(a("worker.js", 1024), ...Array.from({ length: 40 }, (_, i) => a(`admin-app.l${i}.js`, MiB, "asset"))));
+  eq("checkArtifactSizes: 数では断らない・番人が使わない部品(asset)は大きさに数えない", true, true);
+  checkArtifactSizes(m(a("worker.js", 12 * MiB), a("migrations.json", 6 * MiB, "migrations")));
+  eq("checkArtifactSizes: ファイルごとの上限は置かない(合計で縛る)", true, true);
+  await throws("checkArtifactSizes: 番人が使うものの合計が上限を超えれば断る",
+    () => checkArtifactSizes(m(a("worker.js", 15 * MiB), a("static-assets.json", 6 * MiB, "static_assets"))));
+  {
+    const { guardianArtifacts } = await import("./release-limits");
+    const names = guardianArtifacts({ main_module: "app.js", artifacts: [a("app.js", 1), a("migrations.json", 1, "migrations"),
+      a("vars.json", 1, "vars"), a("static-assets.json", 1, "static_assets"), a("admin-app.x.js", 1, "asset"), a("worker.js", 1)] }).map((x) => x.name);
+    eq("guardianArtifacts: 番人が取るのは実行本体・移行・設定・静的資産だけ", names, ["app.js", "migrations.json", "vars.json", "static-assets.json"]);
+    const { checkGuardian1012 } = await import("./release-limits");
+    await throws("checkGuardian1012: 1.0.12 までの番人は 17 個の版を断る(出す側が止める)", () => checkGuardian1012(Array.from({ length: 17 }, (_, i) => a(`f${i}`, 1))));
+    const { reasonToken } = await import("./state");
+    eq("reasonToken: 断りの理由を Defects に載る短い符号にする", reasonToken("release carries too many artifacts"), "release_carries_too_many_artifacts");
+  }
   if (failed) {
     console.log(`\n${failed} 件失敗`);
     process.exit(1);

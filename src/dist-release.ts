@@ -25,7 +25,7 @@
 import type { Env } from "./types";
 import { withTimeout } from "./util";
 import type { Config, ReleaseChannel } from "./config";
-import { MANIFEST_LIMIT, readCapped, verifyManifest, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
+import { MANIFEST_LIMIT, guardianArtifacts, readCapped, verifyManifest, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
 import { fetchStoreRelease, storePointer } from "./store-release";
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
@@ -103,9 +103,10 @@ export async function fetchDistRelease(env: Env, config: Config, version: string
   if (manifest.version !== version) throw new Error("release identity does not match");
   if ((manifest.kind ?? "code") !== "code") throw new Error("release is not code");
 
-  // 2. Artifacts by sha256, checked against the manifest (size and digest).
+  // 2. Artifacts by sha256, checked against the manifest (size and digest). Only those the guardian
+  //    uses (release-limits.ts): the app fetches its own assets.
   const files = new Map<string, Uint8Array>();
-  for (const a of manifest.artifacts) {
+  for (const a of guardianArtifacts(manifest)) {
     const r = await get(env, `/v1/dist/${config.productId}/blobs/${a.sha256}`);
     if (!r.ok) throw new Error(`${a.name} fetch failed: HTTP ${r.status}`);
     let body: ReadableStream<Uint8Array> | null = r.body;

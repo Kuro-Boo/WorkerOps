@@ -24,6 +24,8 @@ import { channelPointer, fetchDistRelease, type Pointer } from "./dist-release";
 import { compareVersion, currentReleaseVersion, deploySignedRelease, failedKey } from "./signed-release";
 import { probeHealth } from "./health";
 import { errMsg, nowIso, OpsError } from "./util";
+import { appendEvent, setState } from "./state";
+import type { SignedRelease } from "./signed-release";
 
 const AUTO_KEY = "workerops:release:auto";
 const AUTO_BY_KEY = "workerops:release:auto_set";
@@ -138,8 +140,24 @@ export async function applyRelease(
   if (!target || !VERSION_RE.test(target)) {
     throw new OpsError(409, "no_release", "No release is offered for this product.");
   }
-  const release = await fetchDistRelease(env, config, target);
+  const release = await fetchRecorded(env, config, target);
   return deploySignedRelease(env, ctx, config, release, reinstall, false, byOperator);
+}
+
+/**
+ * Fetch and verify a version; when that fails, say so where people look —— the state (the console and
+ * the app's screen read it) and Entamy Defects (setState reports failed_predeploy). The automatic
+ * update runs in the background and drops its errors, so a version the guardian refused used to leave
+ * no trace at all: KuroCMS 2.1.15〜2.1.20 reached no install for a day (2026-11-27).
+ */
+async function fetchRecorded(env: Env, config: Config, version: string): Promise<SignedRelease> {
+  try {
+    return await fetchDistRelease(env, config, version);
+  } catch (error) {
+    await appendEvent(env, "fetch_release", "fail", errMsg(error)).catch(() => {});
+    await setState(env, { status: "failed_predeploy", intendedRelease: version, finishedAt: nowIso(), error: errMsg(error) }).catch(() => {});
+    throw error;
+  }
 }
 
 /** The app's admin screen holds the choice: changing it here would be overridden on the next look. */
@@ -179,7 +197,7 @@ export async function pinnedTick(env: Env, ctx: ExecutionContext, loaded: Config
   const config = await resolveConfig(env, loaded);
   if (!config.productId) return;
   if ((await runningVersion(env, config)) === pin) return;
-  const release = await fetchDistRelease(env, config, pin);
+  const release = await fetchRecorded(env, config, pin);
   await deploySignedRelease(env, ctx, config, release, false, true);
 }
 

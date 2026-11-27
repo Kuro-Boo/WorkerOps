@@ -19,7 +19,7 @@
  */
 import type { Env } from "./types";
 import type { ReleaseChannel } from "./config";
-import { MANIFEST_LIMIT, checkArtifactSizes, readCapped, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
+import { MANIFEST_LIMIT, checkArtifactSizes, guardianArtifacts, readCapped, verifyArtifacts, type Manifest, type SignedRelease } from "./signed-release";
 import type { Pointer } from "./dist-release";
 
 const VERSION_RE = /^\d+\.\d+\.\d+$/;
@@ -79,8 +79,8 @@ export async function fetchStoreRelease(store: KVNamespace, product: string, ver
       throw new Error("release artifact metadata is invalid");
     }
   }
-  checkArtifactSizes(manifest.artifacts);
-  for (const a of manifest.artifacts) {
+  checkArtifactSizes(manifest);
+  for (const a of guardianArtifacts(manifest)) {
     const data = await store.get(`${prefix(product)}/blobs/${a.sha256}`, "stream");
     if (data === null) throw new Error(`${a.name} is not in the store`);
     files.set(a.name, await readCapped(data, a.size, a.name));

@@ -27,31 +27,19 @@ import {
 import type { Env } from "./types";
 import { revokedTarget } from "./store-release";
 import { errMsg, nowIso, sleep } from "./util";
+import { checkGuardianSize, guardianArtifacts } from "./release-limits";
+export { guardianArtifacts };
 
-const WORKER_LIMIT = 10 * 1024 * 1024;
-const MIGRATIONS_LIMIT = 5 * 1024 * 1024;
 /** The manifest itself (dist-release.ts・store-release.ts). */
 export const MANIFEST_LIMIT = 256 * 1024;
-/** A release carries the worker, its migrations, vars and static assets; a few more at most. */
-const MAX_ARTIFACTS = 16;
-/** Everything a release may carry together (each artifact also has its own limit). */
-const TOTAL_LIMIT = 2 * WORKER_LIMIT + MIGRATIONS_LIMIT;
-
-const artifactLimit = (a: Artifact): number => (a.role === "migrations" ? MIGRATIONS_LIMIT : WORKER_LIMIT);
 
 /**
- * Refuse a release by what its manifest declares, before any artifact is fetched: how many, how
- * large each, how large together. The bytes read later are held to the declared size (readCapped),
- * so a Worker never buffers more than this — its memory is 128 MB.
+ * Refuse a release by what its manifest declares, before any artifact is fetched: the artifacts the
+ * guardian uses, together (release-limits.ts). The bytes read later are held to the declared size
+ * (readCapped), so a Worker never buffers more than this — its memory is 128 MB.
  */
-export function checkArtifactSizes(artifacts: Artifact[]): void {
-  if (artifacts.length > MAX_ARTIFACTS) throw new Error("release carries too many artifacts");
-  let total = 0;
-  for (const a of artifacts) {
-    if (a.size > artifactLimit(a)) throw new Error(`${a.name} is too large`);
-    total += a.size;
-  }
-  if (total > TOTAL_LIMIT) throw new Error("release is too large");
+export function checkArtifactSizes(manifest: Pick<Manifest, "main_module" | "artifacts">): void {
+  checkGuardianSize(manifest);
 }
 
 /**
@@ -219,9 +207,15 @@ export async function uploadStaticAssets(client: CfClient, sa: StaticAssets): Pr
   const byHash = new Map<string, { base64: string; type: string }>();
   const manifest: Record<string, { hash: string; size: number }> = {};
   for (const f of sa.files) {
-    const bytesOf = Uint8Array.from(atob(f.base64), (c) => c.charCodeAt(0));
-    const hash = (await digest(new Uint8Array([...new TextEncoder().encode(`${f.type}\n`), ...bytesOf]))).slice(0, 32);
-    manifest[f.path] = { hash, size: bytesOf.byteLength };
+    // One typed array, filled in place: spreading the bytes into a plain array held each byte as a JS
+    // number, and a 1.3 MB asset took over 100 MB (measured 2026-11-27; the Worker has 128 MB).
+    const bin = atob(f.base64);
+    const head = new TextEncoder().encode(`${f.type}\n`);
+    const hashed = new Uint8Array(head.byteLength + bin.length);
+    hashed.set(head);
+    for (let i = 0; i < bin.length; i++) hashed[head.byteLength + i] = bin.charCodeAt(i);
+    const hash = (await digest(hashed)).slice(0, 32);
+    manifest[f.path] = { hash, size: bin.length };
     byHash.set(hash, { base64: f.base64, type: f.type });
   }
   const session = await client.assetsUploadSession(manifest);
@@ -278,7 +272,7 @@ export async function verifyManifest(env: Env, value: unknown, product: string):
       throw new Error("release artifact metadata is invalid");
     }
   }
-  checkArtifactSizes(manifest.artifacts);
+  checkArtifactSizes(manifest);
   return manifest;
 }
 
@@ -288,10 +282,12 @@ export function verifyArtifactsSync(manifest: Manifest, files: Map<string, Uint8
   for (const artifact of manifest.artifacts) {
     if (names.has(artifact.name)) throw new Error("release artifact metadata is invalid");
     names.add(artifact.name);
+  }
+  // Only what the guardian uses is fetched and checked; the app fetches and checks the rest itself.
+  for (const artifact of guardianArtifacts(manifest)) {
     const data = files.get(artifact.name);
     if (!data) throw new Error(`${artifact.name} is missing`);
-    const limit = artifactLimit(artifact);
-    if (data.byteLength !== artifact.size || data.byteLength > limit) throw new Error(`${artifact.name} size does not match`);
+    if (data.byteLength !== artifact.size) throw new Error(`${artifact.name} size does not match`);
     if (sha.get(artifact.name) !== artifact.sha256) throw new Error(`${artifact.name} digest does not match`);
   }
   if ([...files.keys()].some((name) => !names.has(name))) throw new Error("undeclared release artifact");

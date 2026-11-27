@@ -122,9 +122,19 @@ export async function setState(
       operation: next.operation,
       step: lastFailedStep(next.events),
       release: next.intendedRelease,
+      reason: reasonToken(next.error),
     });
   }
   return next;
+}
+
+/**
+ * The failure as a short token for Defects, which drops free text (defects.ts). The guardian's own
+ * messages name no person or account ("release is too large for the guardian: …"), so the words are kept.
+ */
+export function reasonToken(error: string | null | undefined): string | undefined {
+  const t = (error ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 64);
+  return t || undefined;
 }
 
 /** Which failure, if any, this write records. A human pressing Revert is not one. */
